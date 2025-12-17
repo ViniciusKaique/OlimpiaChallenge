@@ -98,7 +98,7 @@ def run_analysis(company_name):
     # 1. Configurar o LLM (Gemini)
     # Certifique-se de ter GOOGLE_API_KEY no secrets.toml
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", 
+        model="gemini-pro", # Este é o modelo padrão mais compatível
         google_api_key=st.secrets["GOOGLE_API_KEY"],
         temperature=0.2
     )

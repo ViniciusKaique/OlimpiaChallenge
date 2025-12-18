@@ -215,7 +215,7 @@ def run_langchain_analysis(ticker_query):
             return "⚠️ Erro: GOOGLE_API_KEY não encontrada no secrets.toml"
             
         # ATUALIZAÇÃO DO MODELO: gemini-1.5-flash é o padrão atual
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key)
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key)
         
         template = """Você é um analista financeiro sênior. 
         Analise a ação {ticker} listando 3 pontos positivos (Bullish) ou negativos (Bearish) baseados em análise fundamentalista geral.

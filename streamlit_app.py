@@ -90,81 +90,64 @@ def check_password():
 # ==============================================================================
 
 def run_analysis(company_name):
-    # 1. Configura o Modelo (Usando a versão 2.5 da sua lista)
+    # 1. Configura o Modelo
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash", 
         google_api_key=st.secrets["GOOGLE_API_KEY"],
-        temperature=0.1 # Temperatura baixa para ser mais preciso
+        temperature=0.1
     )
 
-    # 2. Descobrir o Ticker
+    # 2. Descobrir o Ticker (Rápido)
     ticker_prompt = PromptTemplate.from_template(
-        """
-        Atue como um especialista na Bolsa de Valores Brasileira (B3).
-        Sua tarefa é identificar o código (Ticker) da empresa: {company}.
-        
-        Regras:
-        1. Retorne APENAS o código (Ex: PETR4, MGLU3, WEGE3).
-        2. Não adicione .SA no final.
-        3. Se não encontrar, retorne "DESCONHECIDO".
-        """
+        "Identifique o código da ação (Ticker) da empresa {company} na B3. Retorne APENAS o código (Ex: VALE3). Se não achar, retorne DESCONHECIDO."
     )
-    
     ticker_chain = ticker_prompt | llm | StrOutputParser()
     
-    # Interface de Status (Feedback visual para o usuário)
-    with st.status("🤖 Executando AI Agent...", expanded=True) as status:
-        st.write("🔍 1/3 Identificando Ticker...")
+    with st.status("⚡ Processando em alta velocidade...", expanded=True) as status:
+        st.write("🔍 Identificando empresa...")
         ticker = ticker_chain.invoke({"company": company_name}).strip()
-        st.write(f"**Ticker:** {ticker}")
         
-        st.write("💵 2/3 Coletando dados financeiros...")
+        # Paralelismo simulado: Já buscamos o preço
+        st.write(f"💵 Buscando cotação para {ticker}...")
         stock_price = get_stock_price(ticker)
         
-        st.write("📰 3/3 Buscando notícias e fatos relevantes...")
-        # Buscas separadas para garantir qualidade
-        raw_news = get_web_search(f"{company_name} notícias financeiras recentes brasil links")
-        raw_info = get_web_search(f"{company_name} investor relations sobre a empresa")
+        st.write("🌐 Acessando fontes de notícias (Busca Única)...")
+        # OTIMIZAÇÃO: Uma única busca robusta em vez de duas separadas
+        # Isso reduz o tempo de espera pela metade
+        search_query = f"{company_name} BVMF:{ticker} investor relations notícias financeiras recentes e perfil da empresa"
+        web_data = get_web_search(search_query)
         
-        status.update(label="Análise Concluída!", state="complete", expanded=False)
+        status.update(label="Análise Pronta!", state="complete", expanded=False)
 
-    # 3. Geração do Relatório Final (Prompt Ajustado para o PDF)
+    # 3. Geração do Relatório (Prompt Único)
     final_prompt = PromptTemplate.from_template(
         """
-        Você é um Analista de Investment Banking Sênior. Gere um relatório técnico em Markdown.
+        Você é um Analista de Investment Banking Sênior. Gere um relatório Markdown.
         
-        DADOS COLETADOS:
-        - Empresa: {company}
-        - Ticker: {ticker}
-        - Preço: {stock_price}
+        EMPRESA: {company} ({ticker})
+        PREÇO: {stock_price}
         
-        PESQUISA DE NOTÍCIAS (Raw Data):
-        {raw_news}
-        
-        SOBRE A EMPRESA (Raw Data):
-        {raw_info}
+        DADOS DA WEB (Notícias + Info):
+        {web_data}
         
         ---
-        ESTRUTURA OBRIGATÓRIA DO RELATÓRIO:
+        Gere o relatório EXATAMENTE neste formato:
         
         ## 🏢 Relatório: {company}
-        **Ticker:** `{ticker}` | **Cotação Atual:** **{stock_price}**
+        **Ticker:** `{ticker}` | **Cotação:** {stock_price}
         
-        ### 📊 1. Resumo da Empresa
-        (Escreva um parágrafo denso sobre o setor, produtos e posicionamento de mercado)
+        ### 📊 1. Resumo Corporativo
+        (Crie um resumo denso sobre o que a empresa faz baseado nos DADOS DA WEB)
         
-        ### 📰 2. Últimas Notícias Relevantes
-        (Liste 3 destaques recentes. Seja crítico.)
-        * **[Título da Notícia]**: Resumo do fato.
-          *(Fonte/Link se disponível nos dados: ...)*
+        ### 📰 2. Destaques e Notícias
+        (Identifique 3 fatos ou notícias recentes nos DADOS DA WEB. Se houver links, inclua-os.)
+        * **[Título]**: Resumo do fato.
+        * **[Título]**: Resumo do fato.
         
-        * **[Título da Notícia]**: Resumo do fato.
-          *(Fonte/Link se disponível nos dados: ...)*
-          
-        ### 💡 3. Conclusão do Analista
-        (Uma frase final sobre a volatilidade ou momento da empresa)
+        ### 💡 3. Conclusão
+        (Veredito curto sobre o momento da empresa)
         
-        Data da Análise: 17/12/2025
+        Data: 17/12/2025
         """
     )
 
@@ -174,8 +157,7 @@ def run_analysis(company_name):
         "company": company_name,
         "ticker": ticker,
         "stock_price": stock_price,
-        "raw_news": raw_news,
-        "raw_info": raw_info
+        "web_data": web_data
     })
 
 # ==============================================================================

@@ -66,7 +66,7 @@ def check_login():
     
     if user == "admin" and password == "1234":
         st.session_state['logged_in'] = True
-        st.session_state['usuario_atual'] = user # Salva aqui para usar depois
+        st.session_state['usuario_atual'] = user 
     else:
         st.error("Usuário ou senha incorretos")
 
@@ -88,82 +88,97 @@ if not st.session_state['logged_in']:
         st.text_input("Senha", type="password", key="password_input")
         st.button("Entrar", on_click=check_login, use_container_width=True)
         st.info("Use: admin / 1234")
-    st.stop() # Para o código aqui se não estiver logado
+    st.stop() 
 
 # ==============================================================================
-# 5. LÓGICA DE DADOS (COM CORREÇÕES)
+# 5. LÓGICA DE DADOS (CORRIGIDA COM FAST_INFO)
 # ==============================================================================
 
-# Lista de ativos
 MONITORED_TICKERS = [
     "VALE3.SA", "PETR4.SA", "ITUB4.SA", "BBDC4.SA", "BBAS3.SA", "WEGE3.SA", 
     "ABEV3.SA", "RENT3.SA", "BPAC11.SA", "SUZB3.SA", "HAPV3.SA", "RDOR3.SA", 
     "B3SA3.SA", "EQTL3.SA", "PRIO3.SA", "LREN3.SA", "MGLU3.SA", "HYPE3.SA"
 ]
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300) # Cache mais curto (5 min) para pegar oscilação real
 def get_dashboard_data():
-    try:
-        df = yf.download(MONITORED_TICKERS, period="2d", progress=False)['Close']
-        if df.empty: return pd.DataFrame(), pd.DataFrame()
-        
-        changes = ((df.iloc[-1] - df.iloc[-2]) / df.iloc[-2]) * 100
-        prices = df.iloc[-1]
-        
-        data = pd.DataFrame({'Change': changes, 'Price': prices})
-        data.index = data.index.str.replace('.SA', '')
-        
-        return data.sort_values('Change', ascending=False).head(5), \
-               data.sort_values('Change', ascending=True).head(5)
-    except Exception as e:
+    """
+    Usa fast_info para obter preço atual e fechamento anterior com precisão.
+    Isso evita cálculos errados baseados em históricos incompletos.
+    """
+    data_list = []
+    
+    # Cria objeto Tickers para acesso rápido
+    tickers_obj = yf.Tickers(" ".join(MONITORED_TICKERS))
+    
+    for ticker in MONITORED_TICKERS:
+        try:
+            # Acessa informações rápidas (sem baixar histórico gigante)
+            info = tickers_obj.tickers[ticker].fast_info
+            
+            last_price = info.last_price
+            prev_close = info.previous_close
+            
+            if prev_close and prev_close > 0:
+                change_pct = ((last_price - prev_close) / prev_close) * 100
+                
+                data_list.append({
+                    "Ticker": ticker.replace(".SA", ""),
+                    "Price": last_price,
+                    "Change": change_pct
+                })
+        except Exception:
+            continue # Pula se der erro em um ticker específico
+
+    # Converte para DataFrame
+    df = pd.DataFrame(data_list)
+    
+    if df.empty:
         return pd.DataFrame(), pd.DataFrame()
+
+    # Separa Altas e Baixas
+    top_high = df.sort_values('Change', ascending=False).head(5)
+    top_low = df.sort_values('Change', ascending=True).head(5)
+    
+    return top_high, top_low
 
 @st.cache_data(ttl=3600)
 def get_logo(ticker):
     """Busca logo via Google Favicons"""
     try:
-        # Mapeamento rápido manual para evitar chamadas lentas
         manual_map = {
             "VALE3": "vale.com", "PETR4": "petrobras.com.br", "ITUB4": "itau.com.br",
             "BBDC4": "bradesco.com.br", "BBAS3": "bb.com.br", "WEGE3": "weg.net",
             "MGLU3": "magazineluiza.com.br", "LREN3": "lojasrenner.com.br", "HAPV3": "hapvida.com.br"
         }
-        
         domain = manual_map.get(ticker)
         if not domain:
-            # Fallback lento: busca no Yahoo
             t = yf.Ticker(f"{ticker}.SA")
             url = t.info.get('website', '')
             if url: domain = url.split('//')[-1].split('/')[0].replace('www.', '')
             else: return "https://via.placeholder.com/32"
-            
         return f"https://www.google.com/s2/favicons?domain={domain}&sz=64"
     except:
         return "https://via.placeholder.com/32"
 
 @st.cache_data(ttl=900)
 def get_market_news():
-    """Sistema robusto de busca de notícias (Índice -> Petrobras -> Mock)"""
+    """Sistema robusto de busca de notícias"""
     news_items = []
-    
-    # 1. Tenta Ibovespa
     try:
         news = yf.Ticker("^BVSP").news
         if news: news_items = news
     except: pass
     
-    # 2. Se vazio, tenta Petrobras (sempre tem notícia)
     if not news_items:
         try:
             news = yf.Ticker("PETR4.SA").news
             if news: news_items = news
         except: pass
         
-    # Formata o resultado se encontrou algo
     final_news = []
     if news_items:
         for n in news_items[:5]:
-            # Proteção contra campos faltando
             if 'title' in n and 'link' in n:
                 final_news.append({
                     "title": n['title'],
@@ -172,53 +187,36 @@ def get_market_news():
                     "time": datetime.fromtimestamp(n.get('providerPublishTime', 0)).strftime('%H:%M')
                 })
     
-    # 3. Fallback final (Mock) para garantir que não fique em branco
     if not final_news:
         final_news = [
-            {"title": "Ibovespa fecha em leve alta com cenário externo", "link": "#", "pub": "InfoMoney", "time": "10:30"},
-            {"title": "Dólar opera instável à espera de dados dos EUA", "link": "#", "pub": "Investing.com", "time": "09:45"},
-            {"title": "Petrobras anuncia novos planos de investimento", "link": "#", "pub": "Reuters", "time": "08:15"},
-            {"title": "Banco Central reforça compromisso com meta de inflação", "link": "#", "pub": "Valor", "time": "08:00"}
+            {"title": "Ibovespa opera com volatilidade nesta tarde", "link": "#", "pub": "InfoMoney", "time": "Agora"},
+            {"title": "Dólar futuro tem leve queda com exterior", "link": "#", "pub": "Investing.com", "time": "15 min"},
+            {"title": "Mercado aguarda ata do Copom", "link": "#", "pub": "Reuters", "time": "30 min"}
         ]
-        
     return final_news
 
 def resolve_ticker(user_input):
-    """Converte nomes comuns em Tickers"""
     mapa = {
         "ITAU": "ITUB4.SA", "ITAÚ": "ITUB4.SA", "ITUB": "ITUB4.SA",
-        "VALE": "VALE3.SA",
-        "PETROBRAS": "PETR4.SA", "PETRO": "PETR4.SA",
-        "BRADESCO": "BBDC4.SA",
-        "AMBEV": "ABEV3.SA",
-        "WEG": "WEGE3.SA",
-        "MAGALU": "MGLU3.SA", "MAGAZINE": "MGLU3.SA",
-        "NUBANK": "ROXO34.SA"
+        "VALE": "VALE3.SA", "PETROBRAS": "PETR4.SA", "PETRO": "PETR4.SA",
+        "BRADESCO": "BBDC4.SA", "AMBEV": "ABEV3.SA", "WEG": "WEGE3.SA",
+        "MAGALU": "MGLU3.SA", "MAGAZINE": "MGLU3.SA", "NUBANK": "ROXO34.SA"
     }
     clean_input = user_input.upper().strip()
-    
-    # Se já estiver no mapa, retorna o ticker correto
-    if clean_input in mapa:
-        return mapa[clean_input]
-    
-    # Se o usuário digitou só o código (ex: WEGE3), adiciona .SA
-    if not clean_input.endswith(".SA") and len(clean_input) <= 6:
-        return f"{clean_input}.SA"
-        
+    if clean_input in mapa: return mapa[clean_input]
+    if not clean_input.endswith(".SA") and len(clean_input) <= 6: return f"{clean_input}.SA"
     return clean_input
 
 def run_langchain_analysis(ticker_query):
-    """Executa a análise via Gemini 1.5 Flash"""
     try:
         api_key = st.secrets.get("GOOGLE_API_KEY", "")
-        if not api_key:
-            return "⚠️ Erro: GOOGLE_API_KEY não encontrada no secrets.toml"
-            
-        # ATUALIZAÇÃO DO MODELO: gemini-1.5-flash é o padrão atual
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key)
+        if not api_key: return "⚠️ Erro: GOOGLE_API_KEY não encontrada no secrets.toml"
+        
+        # Ajustado para modelo padrão estável
+        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key)
         
         template = """Você é um analista financeiro sênior. 
-        Analise a ação {ticker} listando 3 pontos positivos (Bullish) ou negativos (Bearish) baseados em análise fundamentalista geral.
+        Analise a ação {ticker} listando 3 pontos positivos (Bullish) ou negativos (Bearish).
         Seja direto e use bullet points. Responda em Português."""
         
         chain = PromptTemplate.from_template(template) | llm | StrOutputParser()
@@ -230,7 +228,6 @@ def run_langchain_analysis(ticker_query):
 # 6. LAYOUT DO DASHBOARD
 # ==============================================================================
 
-# BARRA LATERAL
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/295/295128.png", width=50)
     st.write(f"Olá, **{st.session_state['usuario_atual']}**")
@@ -240,7 +237,6 @@ with st.sidebar:
 
 st.title("📊 Mercado Agora")
 
-# Colunas Principais
 col_dados, col_noticias = st.columns([2, 1], gap="large")
 
 with col_dados:
@@ -276,7 +272,6 @@ with col_dados:
     else:
         st.warning("Carregando dados do mercado...")
 
-# Coluna de Notícias
 with col_noticias:
     st.markdown("#### 📰 Manchetes")
     news_list = get_market_news()
@@ -291,12 +286,10 @@ with col_noticias:
 
 st.divider()
 
-# Langchain e Gráficos
 st.subheader("🤖 Analista & Gráficos")
 ticker_input = st.text_input("Pesquisar Ativo (ex: Itau, Vale, PETR4):", placeholder="Digite o nome ou código...")
 
 if ticker_input:
-    # Usa a função inteligente para corrigir o nome
     full_ticker = resolve_ticker(ticker_input)
     clean_ticker = full_ticker.replace(".SA", "")
     

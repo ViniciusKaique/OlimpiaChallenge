@@ -1,195 +1,164 @@
 import streamlit as st
 import yfinance as yf
+from duckduckgo_search import DDGS
 from langchain_google_genai import ChatGoogleGenerativeAI
-from duckduckgo_search import DDGS # <--- MUDANÇA: Import direto da biblioteca
-import time
-
-# LangChain Core
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 
 # ==============================================================================
-# BLOCO 1: CONFIGURAÇÃO
+# 🎨 1. ESTILO VISUAL "STATUS INVEST" (CSS AVANÇADO)
 # ==============================================================================
-st.set_page_config(page_title="Investment Banking AI", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Status Invest AI", page_icon="📈", layout="wide")
 
-# ==============================================================================
-# BLOCO 2: FERRAMENTAS (TOOLS)
-# ==============================================================================
-
-@st.cache_data(ttl=600)
-def get_stock_price(ticker_symbol):
-    """Busca cotação com cache para evitar bloqueios."""
-    if not ticker_symbol or ticker_symbol == "DESCONHECIDO":
-        return "Ticker não identificado."
+# CSS para clonar o visual do site
+st.markdown("""
+<style>
+    /* Fundo geral */
+    .stApp {
+        background-color: #F7F9FA;
+        font-family: 'Barlow', sans-serif;
+    }
     
-    clean_ticker = ticker_symbol.upper().strip()
-    if not clean_ticker.endswith(".SA") and len(clean_ticker) <= 6:
-        clean_ticker += ".SA"
-        
+    /* Remover barra superior padrão do Streamlit */
+    header {visibility: hidden;}
+    
+    /* Cards brancos (Container) */
+    .invest-card {
+        background-color: #FFFFFF;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border: 1px solid #E6E6E6;
+        margin-bottom: 15px;
+    }
+    
+    /* Títulos estilo Status Invest */
+    h1, h2, h3 {
+        color: #00294F !important;
+        font-weight: 700;
+    }
+    
+    /* Mini Card de Cotação (Altas/Baixas) */
+    .mini-card {
+        background: white;
+        border-radius: 6px;
+        padding: 15px;
+        border-left: 5px solid #ddd;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        text-align: center;
+    }
+    .up { border-left-color: #00C853; }
+    .down { border-left-color: #D50000; }
+    
+    .ticker-text { font-weight: bold; font-size: 1.1em; color: #333; }
+    .price-text { font-size: 1.2em; font-weight: bold; color: #00294F; }
+    .var-positive { color: #00C853; font-weight: bold; font-size: 0.9em; }
+    .var-negative { color: #D50000; font-weight: bold; font-size: 0.9em; }
+
+</style>
+""", unsafe_allow_html=True)
+
+# ==============================================================================
+# 🛠️ 2. FERRAMENTAS DE DADOS (YFINANCE + DUCKDUCKGO)
+# ==============================================================================
+
+@st.cache_data(ttl=300)
+def get_stock_data(ticker):
+    """Pega dados financeiros reais."""
+    if not ticker: return None
+    clean = ticker.upper().strip()
+    if not clean.endswith(".SA") and len(clean) <= 6: clean += ".SA"
+    
     try:
-        stock = yf.Ticker(clean_ticker)
-        price = stock.fast_info.last_price
-        if not price:
-            history = stock.history(period="1d")
-            if history.empty: return f"R$ 0.00 (Sem dados)"
-            price = history['Close'].iloc[-1]
-        return f"R$ {price:.2f}"
+        stock = yf.Ticker(clean)
+        info = stock.fast_info
+        price = info.last_price
+        prev = info.previous_close
+        
+        if price and prev:
+            change = ((price - prev) / prev) * 100
+        else:
+            change = 0.0
+            
+        return {"ticker": clean.replace(".SA",""), "price": price, "change": change}
     except:
-        return "Indisponível"
+        return None
 
 def get_web_search_direct(query):
-    """
-    Busca direta usando DDGS para garantir que pegamos os LINKS.
-    Substitui a ferramenta do LangChain que estava dando erro.
-    """
+    """Busca manual para garantir que pegamos Título + Link (Exigência PDF)."""
     results_text = ""
     try:
-        # Busca 5 resultados trazendo corpo, título e LINK (href)
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, region='br-pt', max_results=5))
-            
-            for result in results:
-                # Montamos um texto estruturado para a IA ler
-                results_text += f"""
-                ---
-                Título: {result['title']}
-                Fonte/Link: {result['href']}
-                Conteúdo: {result['body']}
-                ---
-                """
-        return results_text
+            # Pega 4 resultados de notícias
+            results = list(ddgs.news(query, region='br-pt', safesearch='off', max_results=4))
+            for r in results:
+                results_text += f"Titulo: {r['title']} | Link: {r['url']} | Fonte: {r['source']}\n"
     except Exception as e:
-        return f"Erro crítico na busca: {str(e)}"
+        results_text = f"Erro na busca: {str(e)}"
+    return results_text
 
 # ==============================================================================
-# BLOCO 3: SEGURANÇA
+# 🧠 3. INTELIGÊNCIA (PROMPT BASEADO NO PDF)
 # ==============================================================================
 
-def check_password():
-    if "logged_in" not in st.session_state:
-        st.session_state["logged_in"] = False
-    if st.session_state["logged_in"]: return True
-
-    st.sidebar.title("🔐 Login")
-    username = st.sidebar.text_input("Usuário")
-    password = st.sidebar.text_input("Senha", type="password")
-
-    if st.sidebar.button("Entrar"):
-        try:
-            if (username == st.secrets["auth"]["username"] and 
-                password == st.secrets["auth"]["password"]):
-                st.session_state["logged_in"] = True
-                st.rerun()
-            else:
-                st.sidebar.error("Acesso Negado")
-        except:
-            st.error("Erro no secrets.toml")
-    return False
-
-# ==============================================================================
-# BLOCO 4: LÓGICA (LANGCHAIN)
-# ==============================================================================
-
-def run_analysis(company_name):
+def run_analysis(company, ticker, price_info):
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", # Seu modelo atual
+        model="gemini-2.5-flash", 
         google_api_key=st.secrets["GOOGLE_API_KEY"],
         temperature=0.1
     )
-
-    # 1. Identificar Ticker
-    ticker_prompt = PromptTemplate.from_template(
-        "Identifique o código da ação (Ticker) da {company} na B3. Retorne APENAS o código (Ex: PETR4). Se não achar, retorne DESCONHECIDO."
-    )
-    ticker_chain = ticker_prompt | llm | StrOutputParser()
     
-    with st.status("⚡ Analisando Mercado...", expanded=True) as status:
-        st.write("🔍 Identificando Ticker...")
-        ticker = ticker_chain.invoke({"company": company_name}).strip()
-        
-        st.write(f"💵 Buscando Cotação ({ticker})...")
-        stock_price = get_stock_price(ticker)
-        
-        st.write("🌐 Buscando Notícias e Fontes (Isso garante os links)...")
-        # Aqui usamos a nova função que corrige o erro e traz links
-        search_query = f"{company_name} BVMF:{ticker} notícias mercado financeiro brasil"
-        web_data = get_web_search_direct(search_query)
-        
-        status.update(label="Análise Pronta!", state="complete", expanded=False)
+    # Busca notícias específicas com o Ticker para ser preciso
+    web_data = get_web_search_direct(f"{company} {ticker} investidor notícias financeiras recentes")
 
-    # 2. Gerar Relatório
-    final_prompt = PromptTemplate.from_template(
+    # PROMPT RIGOROSO COM O PDF
+    prompt = PromptTemplate.from_template(
         """
-        Você é um Analista Financeiro. Crie um relatório técnico.
+        Você é um analista financeiro do portal 'Status Invest'.
         
-        EMPRESA: {company} ({ticker}) | PREÇO: {stock_price}
+        EMPRESA: {company} ({ticker})
+        PREÇO: {price}
         
-        DADOS DA WEB (Com Links):
+        NOTÍCIAS (Raw Data):
         {web_data}
         
         ---
-        Gere o relatório em MARKDOWN seguindo ESTRITAMENTE este formato:
+        Gere um relatório em MARKDOWN. Siga a estrutura abaixo e use os links fornecidos.
         
-        ## 🏢 {company}
-        **Ticker:** `{ticker}` | **Cotação:** {stock_price}
+        ### 🏢 1. Perfil Corporativo
+        (Responda em texto corrido, sem tópicos, cobrindo:)
+        * **Setor:** Qual o setor de atuação?
+        * **Histórico:** Breve resumo da origem.
+        * **Produtos:** O que a empresa vende?
         
-        ### 📊 Resumo Corporativo
-        [Escreva um parágrafo denso sobre a empresa com base nos dados]
+        ### 📰 2. Notícias & Comunicados
+        (Selecione as 3 mais relevantes. Use o link original para tornar o título clicável).
         
-        ### 📰 Destaques e Fontes
-        (Liste 3 notícias encontradas nos dados. É OBRIGATÓRIO incluir o Link/Fonte que veio nos dados da web).
-        
-        * **[Título da Notícia]**
-          *Resumo:* [Resumo curto do fato]
-          *🔗 Fonte:* [COPIE O LINK EXATO DOS DADOS AQUI]
-        
-        * **[Título da Notícia]**
-          *Resumo:* [Resumo curto do fato]
-          *🔗 Fonte:* [COPIE O LINK EXATO DOS DADOS AQUI]
+        * 🔗 **[TITULO_DA_NOTICIA](LINK_DA_NOTICIA)**
+          *Fonte:* [Nome da Fonte] - [Breve resumo de 1 linha]
 
-        * **[Título da Notícia]**
-          *Resumo:* [Resumo curto do fato]
-          *🔗 Fonte:* [COPIE O LINK EXATO DOS DADOS AQUI]
-        
-        ### 💡 Conclusão
-        [Veredito final curto]
-        
-        Data: 17/12/2025
+        * 🔗 **[TITULO_DA_NOTICIA](LINK_DA_NOTICIA)**
+          *Fonte:* [Nome da Fonte] - [Breve resumo de 1 linha]
+          
+        ### 💡 3. Conclusão
+        [Veredito curto sobre o momento da empresa]
         """
     )
-
-    full_chain = final_prompt | llm | StrOutputParser()
     
-    return full_chain.invoke({
-        "company": company_name,
+    chain = prompt | llm | StrOutputParser()
+    
+    return chain.invoke({
+        "company": company,
         "ticker": ticker,
-        "stock_price": stock_price,
+        "price": price_info,
         "web_data": web_data
     })
 
 # ==============================================================================
-# BLOCO 5: INTERFACE
+# 🖥️ 4. INTERFACE GRÁFICA (O CLONE)
 # ==============================================================================
 
 def main():
-    if not check_password(): st.stop()
-
-    st.title("🏦 Investment Banking AI")
-    st.caption("Relatórios com Fontes e Links Verificáveis")
-    
-    with st.form("main_form"):
-        company = st.text_input("Nome da Empresa:", placeholder="Ex: Magazine Luiza")
-        submitted = st.form_submit_button("Gerar Análise Completa")
-
-    if submitted and company:
-        try:
-            result = run_analysis(company)
-            st.markdown(result)
-            st.download_button("📥 Baixar Relatório", result, file_name=f"{company}.md")
-        except Exception as e:
-            st.error(f"Erro: {e}")
-
-if __name__ == "__main__":
-    main()
+    # --- HEADER / LOGO ---
+    col_logo, col_empty = st.columns([1, 4])
+    with col_

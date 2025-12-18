@@ -4,205 +4,205 @@ import pandas as pd
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-import os
+import datetime
 
 # ==============================================================================
-# ⚙️ CONFIGURAÇÃO INICIAL
+# ⚙️ 1. CONFIGURAÇÃO E LISTA DE ATIVOS
 # ==============================================================================
-st.set_page_config(
-    page_title="Fast Finance AI", 
-    page_icon="⚡", 
-    layout="wide"
-)
+st.set_page_config(page_title="Finance AI Wrapper", page_icon="📈", layout="wide")
 
-# Estilo CSS para limpar a interface e dar destaque
+# Lista de ações líquidas para o "Top 5" (Para ser rápido, não baixamos o IBOV inteiro)
+TOP_STOCKS = [
+    "VALE3.SA", "PETR4.SA", "ITUB4.SA", "BBDC4.SA", "BBAS3.SA", "WEGE3.SA", "ABEV3.SA",
+    "RENT3.SA", "BPAC11.SA", "SUZB3.SA", "HAPV3.SA", "RDOR3.SA", "B3SA3.SA", "EQTL3.SA",
+    "PRIO3.SA", "RAIL3.SA", "GGBR4.SA", "JBSS3.SA", "VIVT3.SA", "CSAN3.SA", "ELET3.SA",
+    "MGLU3.SA", "LREN3.SA", "AZUL4.SA", "GOLL4.SA", "HYPE3.SA"
+]
+
+# CSS para ficar parecido com Google Finance
 st.markdown("""
 <style>
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        border-left: 5px solid #4CAF50;
-    }
+    .big-font { font-size: 32px !important; font-weight: bold; }
+    .metric-pos { color: #137333; font-weight: bold; }
+    .metric-neg { color: #a50e0e; font-weight: bold; }
+    .stButton button { border-radius: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 🔐 SIDEBAR & USUÁRIO
+# 🧠 2. INTELIGÊNCIA (LANGCHAIN)
 # ==============================================================================
-with st.sidebar:
-    st.header("👤 Perfil do Usuário")
-    # Simulação de usuário logado
-    st.markdown("""
-    **Status:** 🟢 Online  
-    **Usuário:** Analista Financeiro  
-    **Acesso:** Premium
-    """)
-    st.divider()
-    st.info("💡 Modo Turbo Ativado: Notícias externas desativadas para máxima velocidade.")
-
-# ==============================================================================
-# 🧠 LANGCHAIN & IA (GEMINI 1.5 FLASH)
-# ==============================================================================
-
 def get_llm():
-    """Configura o modelo mais rápido disponível"""
-    # Certifique-se de ter sua API KEY no arquivo .streamlit/secrets.toml ou no ambiente
-    # Caso não tenha secrets, substitua st.secrets["GOOGLE_API_KEY"] pela string direta (não recomendado para produção)
-    api_key = st.secrets.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY"))
-    
     return ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", # Modelo focado em velocidade
-        google_api_key=api_key,
+        model="gemini-2.5-flash",
+        google_api_key=st.secrets["GOOGLE_API_KEY"],
         temperature=0.0
     )
 
-def identify_ticker(company_name):
-    """
-    Usa LangChain para traduzir 'Nome da Empresa' -> 'Ticker.SA'
-    Ex: 'Itaú' -> 'ITUB4.SA'
-    """
+def identify_ticker_ai(query):
+    """Transforma nome em Ticker usando IA"""
     llm = get_llm()
-    
-    template = """
-    Você é um especialista em mercado financeiro brasileiro (B3).
-    Sua única tarefa é retornar o código (Ticker) da ação principal da empresa solicitada, seguido de '.SA'.
-    Se houver ações preferenciais (PN) e ordinárias (ON), prefira a de maior liquidez (geralmente PN final 4 ou Unit final 11).
-    
-    Exemplos:
-    Entrada: Petrobras -> Saída: PETR4.SA
-    Entrada: Vale -> Saída: VALE3.SA
-    Entrada: Banco do Brasil -> Saída: BBAS3.SA
-    
-    Entrada: {company}
-    Saída (APENAS O CÓDIGO):
-    """
-    
-    prompt = PromptTemplate.from_template(template)
-    chain = prompt | llm | StrOutputParser()
-    
+    template = """Retorne APENAS o código ticker da ação brasileira (.SA) para: {query}. Ex: 'Petrobras' -> 'PETR4.SA'. Sem texto extra."""
+    chain = PromptTemplate.from_template(template) | llm | StrOutputParser()
     try:
-        ticker = chain.invoke({"company": company_name}).strip()
-        return ticker
-    except Exception as e:
-        st.error(f"Erro ao identificar ticker: {e}")
+        return chain.invoke({"query": query}).strip()
+    except:
         return None
 
-def generate_summary(company_name, ticker):
-    """
-    Gera um resumo rápido usando o conhecimento interno do modelo (sem busca web lenta)
-    """
+def generate_summary_ai(ticker):
+    """Gera resumo curto estilo Google"""
     llm = get_llm()
-    
-    template = """
-    Analise a empresa {company} (Ticker: {ticker}).
-    Forneça um resumo executivo em Markdown com:
-    1. **Setor de Atuação**
-    2. **Resumo do Negócio** (máximo 2 frases)
-    3. **Principais Produtos/Serviços**
-    
-    Seja conciso e direto.
-    """
-    
-    prompt = PromptTemplate.from_template(template)
-    chain = prompt | llm | StrOutputParser()
-    
-    return chain.invoke({"company": company_name, "ticker": ticker})
+    template = """Para a empresa {ticker}, escreva um resumo de 3 linhas sobre o que ela faz e seu setor principal. Tom formal."""
+    chain = PromptTemplate.from_template(template) | llm | StrOutputParser()
+    return chain.invoke({"ticker": ticker})
 
 # ==============================================================================
-# 📈 MOTOR DE DADOS (YFINANCE)
+# 📊 3. DADOS DE MERCADO (YFINANCE)
 # ==============================================================================
 
-@st.cache_data(ttl=300) # Cache de 5 minutos
-def get_stock_data(ticker):
-    """Busca dados de preço e histórico para o gráfico"""
-    try:
-        stock = yf.Ticker(ticker)
-        
-        # Dados instantâneos (mais rápido que baixar histórico completo)
-        info = stock.fast_info
-        current_price = info.last_price
-        prev_close = info.previous_close
-        
-        delta = ((current_price - prev_close) / prev_close) * 100
-        
-        # Histórico para o gráfico (últimos 6 meses para ser leve)
-        history = stock.history(period="6mo")
-        
-        return {
-            "price": current_price,
-            "delta": delta,
-            "history": history
-        }
-    except Exception as e:
-        return None
+@st.cache_data(ttl=600)
+def get_market_movers():
+    """Calcula Top 5 Altas e Baixas da lista definida"""
+    data = yf.download(TOP_STOCKS, period="2d", progress=False)['Close']
+    
+    # Calcula variação % do último dia
+    changes = ((data.iloc[-1] - data.iloc[-2]) / data.iloc[-2]) * 100
+    
+    # Cria DataFrame e ordena
+    df = pd.DataFrame({'Ticker': changes.index, 'Change': changes.values})
+    df['Ticker'] = df['Ticker'].str.replace('.SA', '') # Limpa nome
+    
+    top_high = df.sort_values('Change', ascending=False).head(5)
+    top_low = df.sort_values('Change', ascending=True).head(5)
+    
+    return top_high, top_low
+
+def get_stock_details(ticker, period="1mo"):
+    """Pega dados detalhados e histórico baseado no período selecionado"""
+    stock = yf.Ticker(ticker)
+    
+    # Histórico dinâmico
+    # Mapeamento: 1D (usamos 2d e intervalo curto), 5D, 1M, etc.
+    interval = "1d"
+    if period == "1d": 
+        h = stock.history(period="1d", interval="15m") # Intraday
+    elif period == "5d":
+        h = stock.history(period="5d", interval="60m")
+    else:
+        h = stock.history(period=period) # Padrão diário
+
+    info = stock.fast_info
+    
+    # Tenta pegar logo (às vezes o Yahoo tem, senão usamos placeholder)
+    logo = stock.info.get('logo_url', 'https://cdn-icons-png.flaticon.com/512/7669/7669387.png')
+
+    return {
+        "price": info.last_price,
+        "prev_close": info.previous_close,
+        "history": h['Close'],
+        "logo": logo,
+        "name": ticker.replace('.SA', '')
+    }
 
 # ==============================================================================
-# 🖥️ INTERFACE PRINCIPAL
+# 🖥️ 4. INTERFACE DO USUÁRIO
 # ==============================================================================
 
-st.title("🚀 Fast Finance AI Check")
-st.markdown("Digite o nome da empresa para uma análise instantânea.")
+# --- SIDEBAR ---
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/2666/2666505.png", width=50)
+    st.markdown("### Menu")
+    mode = st.radio("Navegação", ["🏠 Início (Mercado)", "🔎 Pesquisar Ativo"])
+    st.divider()
+    st.caption("Powered by Gemini 1.5 & Yahoo Finance")
 
-# Input centralizado
-col1, col2 = st.columns([3, 1])
-with col1:
-    company_input = st.text_input("Nome da Empresa:", placeholder="Ex: Weg, Magazine Luiza, Ambev...")
-with col2:
-    st.write("") # Espaçamento
-    st.write("") 
-    analyze_btn = st.button("Analisar Agora", type="primary", use_container_width=True)
+# --- PÁGINA INICIAL (TOP 5) ---
+if mode == "🏠 Início (Mercado)":
+    st.title("Resumo do Mercado")
+    st.markdown("Monitoramento das principais ações do Brasil hoje.")
+    
+    with st.spinner("Atualizando ranking..."):
+        highs, lows = get_market_movers()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("🚀 Maiores Altas")
+        for _, row in highs.iterrows():
+            st.markdown(f"**{row['Ticker']}**: <span style='color:green'>+{row['Change']:.2f}%</span>", unsafe_allow_html=True)
+            st.progress(min(row['Change']/10, 1.0)) # Barra visual simples
 
-if analyze_btn and company_input:
-    # 1. Identificação do Ticker (LangChain)
-    with st.status("🔍 Identificando ativo...", expanded=True) as status:
-        st.write("Consultando Gemini Flash para encontrar o ticker...")
-        ticker = identify_ticker(company_input)
+    with col2:
+        st.subheader("🔻 Maiores Baixas")
+        for _, row in lows.iterrows():
+            st.markdown(f"**{row['Ticker']}**: <span style='color:red'>{row['Change']:.2f}%</span>", unsafe_allow_html=True)
+            st.progress(min(abs(row['Change'])/10, 1.0))
+
+# --- PÁGINA DE PESQUISA (DETALHES) ---
+elif mode == "🔎 Pesquisar Ativo":
+    c_search, c_btn = st.columns([4, 1])
+    with c_search:
+        query = st.text_input("Busque uma empresa:", placeholder="Ex: Itaú, Vale, Magazine Luiza...")
+    with c_btn:
+        st.write("")
+        st.write("")
+        btn = st.button("Buscar", type="primary", use_container_width=True)
+
+    if query:
+        # 1. Identificar (LangChain)
+        ticker = identify_ticker_ai(query)
         
         if ticker:
-            status.update(label=f"Ativo encontrado: {ticker}", state="running")
+            # 2. Seletor de Tempo (Igual Google Finance)
+            st.write("")
+            time_cols = st.columns([1, 1, 1, 1, 1, 1, 6]) # Colunas para botões ficarem juntos
             
-            # 2. Coleta de Dados (Yahoo Finance)
-            st.write("Baixando cotações em tempo real...")
-            data = get_stock_data(ticker)
-            
-            # 3. Geração de Resumo (LangChain)
-            st.write("Gerando perfil corporativo...")
-            summary = generate_summary(company_input, ticker)
-            
-            status.update(label="Análise Concluída!", state="complete", expanded=False)
+            # Controle de estado para o período
+            period_map = {"1D": "1d", "5D": "5d", "1M": "1mo", "6M": "6mo", "1A": "1y", "Máx": "max"}
+            selected_label = st.radio("Período", options=list(period_map.keys()), horizontal=True, label_visibility="collapsed")
+            selected_period = period_map[selected_label]
+
+            # 3. Baixar Dados
+            try:
+                data = get_stock_details(ticker, selected_period)
+                
+                # --- CABEÇALHO ESTILO GOOGLE ---
+                st.divider()
+                h_col1, h_col2 = st.columns([1, 5])
+                
+                with h_col1:
+                    # Exibe Logo
+                    st.image(data['logo'], width=80)
+                
+                with h_col2:
+                    st.markdown(f"<div class='big-font'>{query.upper()} ({ticker})</div>", unsafe_allow_html=True)
+                    
+                    # Cálculo de variação
+                    delta = data['price'] - data['prev_close']
+                    delta_pct = (delta / data['prev_close']) * 100
+                    color_cls = "metric-pos" if delta >= 0 else "metric-neg"
+                    sinal = "+" if delta >= 0 else ""
+                    
+                    st.markdown(
+                        f"""
+                        <span style='font-size: 28px'>R$ {data['price']:.2f}</span> 
+                        <span class='{color_cls}'> {sinal}{delta:.2f} ({sinal}{delta_pct:.2f}%) </span> hoje
+                        """, 
+                        unsafe_allow_html=True
+                    )
+
+                # --- GRÁFICO ---
+                st.markdown("---")
+                # Gráfico de linha simples e limpo
+                st.line_chart(data['history'], color="#137333" if delta >= 0 else "#a50e0e", use_container_width=True)
+                
+                # --- RESUMO (LANGCHAIN) ---
+                with st.expander("Sobre a empresa", expanded=True):
+                    with st.spinner("Gerando resumo com IA..."):
+                        summary = generate_summary_ai(ticker)
+                        st.write(summary)
+
+            except Exception as e:
+                st.error(f"Erro ao carregar dados: {e}")
         else:
-            status.update(label="Erro ao encontrar empresa.", state="error")
-            st.stop()
-
-    if data:
-        # Layout de Resultados
-        st.divider()
-        
-        # Cabeçalho com Preço
-        c_metrics, c_chart = st.columns([1, 2])
-        
-        with c_metrics:
-            st.subheader(f"🏢 {ticker}")
-            
-            color_delta = "normal"
-            if data['delta'] > 0: color_delta = "normal" # Streamlit trata verde como normal/positivo automático
-            
-            st.metric(
-                label="Preço Atual",
-                value=f"R$ {data['price']:.2f}",
-                delta=f"{data['delta']:.2f}%"
-            )
-            
-            st.markdown("---")
-            st.markdown("### 📋 Perfil da Empresa")
-            st.markdown(summary)
-
-        with c_chart:
-            st.subheader("📈 Performance (6 Meses)")
-            # Gráfico de Área do Streamlit é rápido e bonito
-            st.area_chart(data['history']['Close'], color="#4CAF50" if data['delta'] > 0 else "#FF5252")
-
-else:
-    # Estado Zero (Tela Inicial)
-    st.info("Aguardando entrada de dados para iniciar o fluxo LangChain...")
+            st.warning("Empresa não encontrada. Tente novamente.")

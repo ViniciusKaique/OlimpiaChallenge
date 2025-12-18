@@ -52,7 +52,7 @@ def get_llm():
     api_key = st.secrets.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY"))
     
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", # Modelo focado em velocidade
+        model="gemini-2.5-flash", # Modelo focado em velocidade
         google_api_key=api_key,
         temperature=0.0
     )

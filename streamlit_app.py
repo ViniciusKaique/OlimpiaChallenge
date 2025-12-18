@@ -95,17 +95,14 @@ MONITORED_TICKERS = [
     "B3SA3.SA", "EQTL3.SA", "PRIO3.SA", "LREN3.SA", "MGLU3.SA", "HYPE3.SA"
 ]
 
-@st.cache_data(ttl=120) # Cache curto (2 min) para garantir preço fresco
+@st.cache_data(ttl=120) 
 def get_dashboard_data():
     """Usa fast_info para pegar variação exata baseada no fechamento anterior"""
     data = []
-    
-    # Baixa objetos Ticker em lote (mais rápido)
     tickers = yf.Tickers(" ".join(MONITORED_TICKERS))
     
     for symbol in MONITORED_TICKERS:
         try:
-            # fast_info acessa dados brutos da bolsa sem processamento de histórico
             info = tickers.tickers[symbol].fast_info
             price = info.last_price
             prev_close = info.previous_close
@@ -128,7 +125,7 @@ def get_dashboard_data():
 
 @st.cache_data(ttl=900)
 def get_google_news():
-    """Busca notícias via RSS do Google News (Muito mais estável que Yahoo)"""
+    """Busca notícias via RSS do Google News (Estável)"""
     url = "https://news.google.com/rss/search?q=Mercado+Financeiro+Brasil+when:1d&hl=pt-BR&gl=BR&ceid=BR:pt-419"
     try:
         response = requests.get(url, timeout=5)
@@ -137,7 +134,6 @@ def get_google_news():
         
         for item in root.findall('.//item')[:6]:
             title = item.find('title').text
-            # Limpa o título (Remove o nome do jornal no final se tiver)
             source = "Google News"
             if " - " in title:
                 parts = title.rsplit(" - ", 1)
@@ -148,15 +144,14 @@ def get_google_news():
                 "title": title,
                 "link": item.find('link').text,
                 "source": source,
-                "time": item.find('pubDate').text[17:22] # Hora HH:MM
+                "time": item.find('pubDate').text[17:22]
             })
         return news_list
     except:
-        return [{"title": "Erro ao carregar notícias do Google", "link": "#", "source": "Sistema", "time": "--:--"}]
+        return [{"title": "Erro ao carregar notícias", "link": "#", "source": "Sistema", "time": "--:--"}]
 
 @st.cache_data(ttl=3600)
 def get_logo(ticker):
-    """Busca logo via Google Favicons baseado em dicionário de sites"""
     map_sites = {
         "VALE3": "vale.com", "PETR4": "petrobras.com.br", "ITUB4": "itau.com.br",
         "BBDC4": "bradesco.com.br", "BBAS3": "bb.com.br", "WEGE3": "weg.net",
@@ -168,30 +163,59 @@ def get_logo(ticker):
     return f"https://www.google.com/s2/favicons?domain={domain}&sz=64"
 
 def resolve_ticker(text):
-    """Corrige nomes comuns para Tickers da Bolsa"""
+    """
+    SUPER MAPA DE NOMES -> TICKERS
+    Resolve o problema de buscar 'Suzano' e dar erro.
+    """
     mapa = {
+        # Bancos
         "ITAU": "ITUB4.SA", "ITAÚ": "ITUB4.SA", "ITUB": "ITUB4.SA",
-        "VALE": "VALE3.SA", "PETROBRAS": "PETR4.SA", "PETRO": "PETR4.SA", "PETR4": "PETR4.SA",
-        "BRADESCO": "BBDC4.SA", "AMBEV": "ABEV3.SA", "WEG": "WEGE3.SA",
-        "MAGALU": "MGLU3.SA", "MAGAZINE": "MGLU3.SA", "NUBANK": "ROXO34.SA"
+        "BRADESCO": "BBDC4.SA", "BBDC": "BBDC4.SA",
+        "BANCO DO BRASIL": "BBAS3.SA", "BB": "BBAS3.SA",
+        "SANTANDER": "SANB11.SA", "NUBANK": "ROXO34.SA", "BTG": "BPAC11.SA",
+        
+        # Commodities & Energia
+        "VALE": "VALE3.SA", 
+        "PETROBRAS": "PETR4.SA", "PETRO": "PETR4.SA",
+        "SUZANO": "SUZB3.SA",
+        "CSN": "CSNA3.SA", "GERDAU": "GGBR4.SA",
+        "PRIO": "PRIO3.SA", "3R": "RRRP3.SA",
+        "ELETROBRAS": "ELET3.SA", "CEMIG": "CMIG4.SA", "COPEL": "CPLE6.SA",
+        
+        # Varejo & Consumo
+        "MAGALU": "MGLU3.SA", "MAGAZINE": "MGLU3.SA",
+        "VIA": "BHIA3.SA", "CASAS BAHIA": "BHIA3.SA",
+        "RENNER": "LREN3.SA", "LOJAS RENNER": "LREN3.SA",
+        "AMBEV": "ABEV3.SA", "NATURA": "NTCO3.SA",
+        "LOCALIZA": "RENT3.SA",
+        
+        # Saúde & Outros
+        "HAPVIDA": "HAPV3.SA", "REDE DOR": "RDOR3.SA",
+        "WEG": "WEGE3.SA", "EMBRAER": "EMBR3.SA", "B3": "B3SA3.SA"
     }
+    
     clean = text.upper().strip()
-    if clean in mapa: return mapa[clean]
-    # Se digitar só WEGE3, adiciona .SA
-    if len(clean) <= 6 and not clean.endswith(".SA"): return f"{clean}.SA"
+    
+    # 1. Tenta achar no mapa direto
+    if clean in mapa:
+        return mapa[clean]
+    
+    # 2. Se o usuário digitou o ticker sem .SA (ex: WEGE3)
+    if len(clean) <= 6 and not clean.endswith(".SA"):
+        return f"{clean}.SA"
+        
     return clean
 
 def run_gemini_analysis(ticker):
-    """Analista IA (Atualizado para Gemini 1.5 Flash)"""
+    """Analista IA (Gemini 1.5 Flash)"""
     try:
         api_key = st.secrets.get("GOOGLE_API_KEY", "")
         if not api_key: return "⚠️ Configure a API Key no arquivo .streamlit/secrets.toml"
         
-        # Modelo atualizado e mais rápido
         llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key)
         
         template = """Você é um analista financeiro experiente.
-        Analise a ação {ticker} e forneça 3 pontos cruciais (Positivos ou Negativos) para um investidor hoje.
+        Analise a ação {ticker} e forneça 3 pontos fundamentais (Positivos ou Negativos) para um investidor hoje.
         Seja direto, use bullet points e fale em Português."""
         
         chain = PromptTemplate.from_template(template) | llm | StrOutputParser()
@@ -262,10 +286,10 @@ st.divider()
 
 # Área de Análise
 st.subheader("🤖 Analista IA & Gráficos")
-search_input = st.text_input("Pesquisar Ativo (ex: Itau, Vale):", placeholder="Digite o nome ou código...")
+search_input = st.text_input("Pesquisar Ativo (ex: Itau, Suzano, VALE3):", placeholder="Digite o nome ou código...").strip()
 
 if search_input:
-    # Resolve o nome para Ticker oficial
+    # 1. Resolve o nome para Ticker oficial usando o mapa
     ticker_oficial = resolve_ticker(search_input)
     ticker_display = ticker_oficial.replace(".SA", "")
     
@@ -275,18 +299,21 @@ if search_input:
         st.markdown(f"**Gráfico: {ticker_display}**")
         try:
             stock = yf.Ticker(ticker_oficial)
-            # Pega 1 ano de histórico para garantir que o gráfico não fique vazio
+            # 2. Verifica se o ticker existe pegando histórico
             hist = stock.history(period="1y")
             
             if not hist.empty:
                 st.line_chart(hist['Close'], color="#3b82f6")
             else:
-                st.warning(f"Não foram encontrados dados recentes para {ticker_oficial}. Tente outro ativo.")
+                # Se ainda assim falhar (ex: usuário digitou algo aleatório)
+                st.warning(f"Não encontramos dados para '{search_input}'. Tente digitar o código (ex: SUZB3).")
         except Exception as e:
-            st.error(f"Erro ao carregar gráfico: {e}")
+            st.error(f"Erro ao carregar: {e}")
             
     with cia:
-        st.markdown(f"**Análise Inteligente**")
-        with st.spinner(f"Analisando {ticker_display}..."):
-            analise = run_gemini_analysis(ticker_display)
-            st.info(analise)
+        # Só roda a IA se o ticker for válido (histórico não vazio)
+        if not hist.empty:
+            st.markdown(f"**Análise Inteligente**")
+            with st.spinner(f"Analisando {ticker_display}..."):
+                analise = run_gemini_analysis(ticker_display)
+                st.info(analise)

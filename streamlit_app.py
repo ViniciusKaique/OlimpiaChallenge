@@ -207,7 +207,7 @@ def run_langchain_analysis(ticker_symbol, company_name):
         if not api_key: return "⚠️ Configure a API Key no arquivo secrets.toml"
         
         # Modelo 1.5 Flash (Rápido e Eficiente)
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key)
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key)
         
         # Prompt Engenharia alinhada ao Desafio
         template = """

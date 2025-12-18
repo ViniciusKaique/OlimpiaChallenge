@@ -4,67 +4,122 @@ from duckduckgo_search import DDGS
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+import pandas as pd
 
 # ==============================================================================
-# 🎨 1. ESTILO VISUAL "STATUS INVEST" (CSS AVANÇADO)
+# 🎨 1. CSS ESTILO "STATUS INVEST"
 # ==============================================================================
 st.set_page_config(page_title="Status Invest AI", page_icon="📈", layout="wide")
 
-# CSS para clonar o visual do site
 st.markdown("""
 <style>
-    /* Fundo geral */
-    .stApp {
-        background-color: #F7F9FA;
-        font-family: 'Barlow', sans-serif;
-    }
+    /* Fundo Geral */
+    .stApp { background-color: #F7F9FA; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     
-    /* Remover barra superior padrão do Streamlit */
+    /* Esconder Menu Padrão */
+    #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
-    
-    /* Cards brancos (Container) */
+
+    /* Card Branco Padrão */
     .invest-card {
         background-color: #FFFFFF;
         padding: 20px;
         border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         border: 1px solid #E6E6E6;
         margin-bottom: 15px;
     }
-    
-    /* Títulos estilo Status Invest */
-    h1, h2, h3 {
-        color: #00294F !important;
-        font-weight: 700;
-    }
-    
-    /* Mini Card de Cotação (Altas/Baixas) */
-    .mini-card {
-        background: white;
-        border-radius: 6px;
-        padding: 15px;
-        border-left: 5px solid #ddd;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        text-align: center;
-    }
-    .up { border-left-color: #00C853; }
-    .down { border-left-color: #D50000; }
-    
-    .ticker-text { font-weight: bold; font-size: 1.1em; color: #333; }
-    .price-text { font-size: 1.2em; font-weight: bold; color: #00294F; }
-    .var-positive { color: #00C853; font-weight: bold; font-size: 0.9em; }
-    .var-negative { color: #D50000; font-weight: bold; font-size: 0.9em; }
 
+    /* Títulos */
+    h1, h2, h3, h4 { color: #00294F !important; font-weight: 700; }
+    
+    /* Input de Pesquisa */
+    .stTextInput input {
+        border-radius: 20px;
+        border: 1px solid #ddd;
+        padding: 10px 20px;
+    }
+
+    /* Estilo dos Mini-Cards (Altas e Baixas) */
+    .stock-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px;
+        border-bottom: 1px solid #f0f0f0;
+        transition: background 0.2s;
+    }
+    .stock-row:hover { background-color: #f9f9f9; }
+    
+    .ticker-badge {
+        font-weight: bold;
+        color: #333;
+        font-size: 14px;
+        background: #eee;
+        padding: 4px 8px;
+        border-radius: 4px;
+    }
+    
+    .price-val { font-weight: 600; color: #00294F; }
+    
+    .up-tag { color: #00C853; font-weight: bold; background: #E8F5E9; padding: 2px 6px; border-radius: 4px; font-size: 0.9em;}
+    .down-tag { color: #D50000; font-weight: bold; background: #FFEBEE; padding: 2px 6px; border-radius: 4px; font-size: 0.9em;}
+
+    /* Botões */
+    .stButton button {
+        background-color: #FFB300; /* Amarelo Status Invest */
+        color: black;
+        font-weight: bold;
+        border: none;
+        border-radius: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 🛠️ 2. FERRAMENTAS DE DADOS (YFINANCE + DUCKDUCKGO)
+# 🛠️ 2. MOTOR DE DADOS (YFINANCE + SIMULAÇÃO DE DASHBOARD)
 # ==============================================================================
 
 @st.cache_data(ttl=300)
-def get_stock_data(ticker):
-    """Pega dados financeiros reais."""
+def get_market_overview():
+    """
+    Simula o painel de 'Altas e Baixas' monitorando as principais ações do IBOV.
+    O yfinance não dá a lista da bolsa toda, então monitoramos uma carteira fixa.
+    """
+    # Lista de ações populares para monitorar no dashboard
+    tickers = ["VALE3.SA", "PETR4.SA", "ITUB4.SA", "BBDC4.SA", "WEGE3.SA", 
+               "MGLU3.SA", "BBAS3.SA", "RENT3.SA", "PRIO3.SA", "HAPV3.SA", "ABEV3.SA"]
+    
+    data_list = []
+    
+    for t in tickers:
+        try:
+            stock = yf.Ticker(t)
+            # Pega dados rápidos
+            price = stock.fast_info.last_price
+            prev = stock.fast_info.previous_close
+            
+            if price and prev:
+                change = ((price - prev) / prev) * 100
+                data_list.append({
+                    "Ticker": t.replace(".SA", ""),
+                    "Preço": price,
+                    "Var": change
+                })
+        except:
+            continue
+            
+    df = pd.DataFrame(data_list)
+    
+    # Separa Altas e Baixas
+    altas = df[df["Var"] >= 0].sort_values(by="Var", ascending=False).head(5)
+    baixas = df[df["Var"] < 0].sort_values(by="Var", ascending=True).head(5)
+    
+    return altas, baixas
+
+@st.cache_data(ttl=120)
+def get_stock_details(ticker):
+    """Pega detalhes específicos de uma ação pesquisada."""
     if not ticker: return None
     clean = ticker.upper().strip()
     if not clean.endswith(".SA") and len(clean) <= 6: clean += ".SA"
@@ -72,33 +127,29 @@ def get_stock_data(ticker):
     try:
         stock = yf.Ticker(clean)
         info = stock.fast_info
-        price = info.last_price
-        prev = info.previous_close
-        
-        if price and prev:
-            change = ((price - prev) / prev) * 100
-        else:
-            change = 0.0
-            
-        return {"ticker": clean.replace(".SA",""), "price": price, "change": change}
+        return {
+            "ticker": clean.replace(".SA",""),
+            "price": info.last_price,
+            "change": ((info.last_price - info.previous_close)/info.previous_close)*100
+        }
     except:
         return None
 
 def get_web_search_direct(query):
-    """Busca manual para garantir que pegamos Título + Link (Exigência PDF)."""
-    results_text = ""
+    """Busca com DDGS garantindo links para o PDF."""
+    text_results = ""
     try:
         with DDGS() as ddgs:
-            # Pega 4 resultados de notícias
             results = list(ddgs.news(query, region='br-pt', safesearch='off', max_results=4))
             for r in results:
-                results_text += f"Titulo: {r['title']} | Link: {r['url']} | Fonte: {r['source']}\n"
+                # Estrutura clara para o Gemini entender que isso é uma fonte
+                text_results += f"TITULO: {r['title']} | LINK: {r['url']} | FONTE: {r['source']}\n"
     except Exception as e:
-        results_text = f"Erro na busca: {str(e)}"
-    return results_text
+        text_results = f"Erro busca: {e}"
+    return text_results
 
 # ==============================================================================
-# 🧠 3. INTELIGÊNCIA (PROMPT BASEADO NO PDF)
+# 🧠 3. INTELIGÊNCIA (GEMINI - FORMATO PDF)
 # ==============================================================================
 
 def run_analysis(company, ticker, price_info):
@@ -108,57 +159,137 @@ def run_analysis(company, ticker, price_info):
         temperature=0.1
     )
     
-    # Busca notícias específicas com o Ticker para ser preciso
-    web_data = get_web_search_direct(f"{company} {ticker} investidor notícias financeiras recentes")
+    web_data = get_web_search_direct(f"{company} {ticker} ações notícias investidor histórico")
 
-    # PROMPT RIGOROSO COM O PDF
+    # PROMPT ESTRUTURADO CONFORME PDF (Setor, Histórico, Produtos + Links)
     prompt = PromptTemplate.from_template(
         """
-        Você é um analista financeiro do portal 'Status Invest'.
+        Você é um analista sênior do portal 'Status Invest'.
         
-        EMPRESA: {company} ({ticker})
-        PREÇO: {price}
+        DADOS: {company} ({ticker}) | Preço: {price}
+        NOTÍCIAS (Raw): {web_data}
         
-        NOTÍCIAS (Raw Data):
-        {web_data}
+        Gere um relatório MARKDOWN estritamente neste formato:
         
-        ---
-        Gere um relatório em MARKDOWN. Siga a estrutura abaixo e use os links fornecidos.
-        
-        ### 🏢 1. Perfil Corporativo
-        (Responda em texto corrido, sem tópicos, cobrindo:)
-        * **Setor:** Qual o setor de atuação?
-        * **Histórico:** Breve resumo da origem.
-        * **Produtos:** O que a empresa vende?
-        
-        ### 📰 2. Notícias & Comunicados
-        (Selecione as 3 mais relevantes. Use o link original para tornar o título clicável).
-        
-        * 🔗 **[TITULO_DA_NOTICIA](LINK_DA_NOTICIA)**
-          *Fonte:* [Nome da Fonte] - [Breve resumo de 1 linha]
+        ### 🏢 1. Perfil da Empresa
+        * **Setor:** [Identifique o setor]
+        * **Histórico:** [Resumo de 2-3 linhas sobre a fundação e origem]
+        * **Produtos/Serviços:** [Liste os principais produtos]
 
+        ### 📰 2. Destaques Recentes (Com Links)
+        (Selecione 3 notícias dos dados. Use o formato de link Markdown OBRIGATÓRIO).
+        
         * 🔗 **[TITULO_DA_NOTICIA](LINK_DA_NOTICIA)**
-          *Fonte:* [Nome da Fonte] - [Breve resumo de 1 linha]
+          *Fonte:* [Nome da Fonte]
           
+        * 🔗 **[TITULO_DA_NOTICIA](LINK_DA_NOTICIA)**
+          *Fonte:* [Nome da Fonte]
+
         ### 💡 3. Conclusão
-        [Veredito curto sobre o momento da empresa]
+        [Veredito de 1 linha sobre o momento da empresa]
         """
     )
     
     chain = prompt | llm | StrOutputParser()
-    
-    return chain.invoke({
-        "company": company,
-        "ticker": ticker,
-        "price": price_info,
-        "web_data": web_data
-    })
+    return chain.invoke({"company": company, "ticker": ticker, "price": price_info, "web_data": web_data})
 
 # ==============================================================================
-# 🖥️ 4. INTERFACE GRÁFICA (O CLONE)
+# 🖥️ 4. INTERFACE GRÁFICA (O DASHBOARD)
 # ==============================================================================
 
 def main():
-    # --- HEADER / LOGO ---
-    col_logo, col_empty = st.columns([1, 4])
-    with col_
+    # --- HEADER ---
+    st.markdown("## 📊 STATUS <span style='color:#FFB300'>INVEST</span> AI", unsafe_allow_html=True)
+    
+    # --- BARRA DE PESQUISA ---
+    with st.container():
+        st.markdown('<div class="invest-card" style="padding:10px;">', unsafe_allow_html=True)
+        col_search, col_btn = st.columns([5, 1])
+        with col_search:
+            search_query = st.text_input("", placeholder="🔍 Busque por empresa ou ticker (ex: WEGE3, Petrobras)...", label_visibility="collapsed")
+        with col_btn:
+            search_btn = st.button("BUSCAR", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- LÓGICA DE EXIBIÇÃO ---
+    
+    # CASO 1: USUÁRIO PESQUISOU ALGO
+    if search_btn and search_query:
+        # 1. Identificar Ticker via Gemini (Rápido)
+        llm_quick = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=st.secrets["GOOGLE_API_KEY"])
+        ticker_finder = (PromptTemplate.from_template("Responda APENAS o ticker da ação {q} na B3 (ex: VALE3). Sem .SA") | llm_quick | StrOutputParser())
+        ticker = ticker_finder.invoke({"q": search_query}).strip()
+        
+        # 2. Pegar Dados
+        stock_data = get_stock_details(ticker)
+        
+        if stock_data:
+            # HEADER DA AÇÃO
+            cor_var = "#00C853" if stock_data['change'] >= 0 else "#D50000"
+            st.markdown(f"""
+            <div class="invest-card">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <h1 style="margin:0;">{stock_data['ticker']}</h1>
+                        <span style="color:gray;">{search_query.upper()}</span>
+                    </div>
+                    <div style="text-align:right;">
+                        <h1 style="margin:0;">R$ {stock_data['price']:.2f}</h1>
+                        <span style="color:{cor_var}; font-weight:bold; font-size:1.2em;">
+                            {stock_data['change']:+.2f}%
+                        </span>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # RELATÓRIO GEMINI
+            with st.spinner("Analisando fundamentos e notícias..."):
+                report = run_analysis(search_query, ticker, stock_data['price'])
+                st.markdown('<div class="invest-card">', unsafe_allow_html=True)
+                st.markdown(report)
+                st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.error("Ação não encontrada.")
+
+    # CASO 2: TELA INICIAL (DASHBOARD ALTAS E BAIXAS)
+    else:
+        st.markdown("#### 📉 Visão de Mercado (Monitoramento IBOV)")
+        altas, baixas = get_market_overview()
+        
+        col_altas, col_baixas = st.columns(2)
+        
+        # Renderizar Coluna de Altas
+        with col_altas:
+            st.markdown('<div class="invest-card"> <h4 style="border-bottom:2px solid #00C853; padding-bottom:10px;">🚀 Maiores Altas</h4>', unsafe_allow_html=True)
+            if not altas.empty:
+                for index, row in altas.iterrows():
+                    st.markdown(f"""
+                    <div class="stock-row">
+                        <span class="ticker-badge">{row['Ticker']}</span>
+                        <span class="price-val">R$ {row['Preço']:.2f}</span>
+                        <span class="up-tag">▲ {row['Var']:.2f}%</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.write("Sem dados de alta no momento.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Renderizar Coluna de Baixas
+        with col_baixas:
+            st.markdown('<div class="invest-card"> <h4 style="border-bottom:2px solid #D50000; padding-bottom:10px;">🔻 Maiores Baixas</h4>', unsafe_allow_html=True)
+            if not baixas.empty:
+                for index, row in baixas.iterrows():
+                    st.markdown(f"""
+                    <div class="stock-row">
+                        <span class="ticker-badge">{row['Ticker']}</span>
+                        <span class="price-val">R$ {row['Preço']:.2f}</span>
+                        <span class="down-tag">▼ {row['Var']:.2f}%</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.write("Sem dados de baixa no momento.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()

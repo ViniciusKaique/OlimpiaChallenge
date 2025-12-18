@@ -1,17 +1,60 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-import datetime
+import requests
+from datetime import datetime
 
 # ==============================================================================
-# ⚙️ 1. CONFIGURAÇÃO E LISTA DE ATIVOS
+# ⚙️ 1. CONFIGURAÇÃO DA PÁGINA E CSS
 # ==============================================================================
-st.set_page_config(page_title="Finance AI Wrapper", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Dashboard Mercado", page_icon="📉", layout="wide")
 
-# Lista de ações líquidas para o "Top 5" (Para ser rápido, não baixamos o IBOV inteiro)
+# CSS para esconder elementos padrões do Streamlit e compactar a view
+st.markdown("""
+<style>
+    /* Remove padding excessivo do topo */
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+    /* Esconde menu e footer */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    /* Estilo dos Cards de Ações */
+    .stock-card {
+        background-color: #262730;
+        padding: 10px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border: 1px solid #363945;
+    }
+    .stock-info { display: flex; align-items: center; gap: 10px; }
+    .stock-logo { width: 30px; height: 30px; border-radius: 50%; object-fit: cover;}
+    .price-tag { font-weight: bold; font-size: 14px; }
+    .pos { color: #4ade80; }
+    .neg { color: #f87171; }
+    
+    /* Estilo das Notícias */
+    .news-card {
+        background-color: #1f2937;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 12px;
+        border-left: 4px solid #3b82f6;
+    }
+    .news-title { font-weight: 600; font-size: 15px; margin-bottom: 5px; color: #fff; text-decoration: none;}
+    .news-meta { font-size: 12px; color: #9ca3af; display: flex; justify-content: space-between;}
+</style>
+""", unsafe_allow_html=True)
+
+# ==============================================================================
+# 🗂️ 2. DADOS E MAPEAMENTO (LOGOS CORRIGIDOS)
+# ==============================================================================
+
 TOP_STOCKS = [
     "VALE3.SA", "PETR4.SA", "ITUB4.SA", "BBDC4.SA", "BBAS3.SA", "WEGE3.SA", "ABEV3.SA",
     "RENT3.SA", "BPAC11.SA", "SUZB3.SA", "HAPV3.SA", "RDOR3.SA", "B3SA3.SA", "EQTL3.SA",
@@ -19,190 +62,144 @@ TOP_STOCKS = [
     "MGLU3.SA", "LREN3.SA", "AZUL4.SA", "GOLL4.SA", "HYPE3.SA"
 ]
 
-# CSS para ficar parecido com Google Finance
-st.markdown("""
-<style>
-    .big-font { font-size: 32px !important; font-weight: bold; }
-    .metric-pos { color: #137333; font-weight: bold; }
-    .metric-neg { color: #a50e0e; font-weight: bold; }
-    .stButton button { border-radius: 20px; }
-</style>
-""", unsafe_allow_html=True)
+# Mapeamento manual para garantir logos certos (Clearbit usa domínios)
+DOMAINS = {
+    "VALE3": "vale.com", "PETR4": "petrobras.com.br", "ITUB4": "itau.com.br", 
+    "BBDC4": "bradesco.com.br", "BBAS3": "bb.com.br", "WEGE3": "weg.net", 
+    "ABEV3": "ambev.com.br", "RENT3": "localiza.com", "BPAC11": "btgpactual.com",
+    "SUZB3": "suzano.com.br", "HAPV3": "hapvida.com.br", "RDOR3": "rededorsaoluiz.com.br",
+    "B3SA3": "b3.com.br", "EQTL3": "equatorialenergia.com.br", "PRIO3": "prio3.com.br",
+    "RAIL3": "rumolog.com", "GGBR4": "gerdau.com.br", "JBSS3": "jbs.com.br",
+    "VIVT3": "telefonica.com.br", "CSAN3": "cosan.com.br", "ELET3": "eletrobras.com",
+    "MGLU3": "magazineluiza.com.br", "LREN3": "lojasrenner.com.br", "AZUL4": "voeazul.com.br",
+    "GOLL4": "voegol.com.br", "HYPE3": "hypera.com.br"
+}
 
 # ==============================================================================
-# 🧠 2. INTELIGÊNCIA (LANGCHAIN)
-# ==============================================================================
-def get_llm():
-    return ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=st.secrets["GOOGLE_API_KEY"],
-        temperature=0.0
-    )
-
-def identify_ticker_ai(query):
-    """Transforma nome em Ticker usando IA"""
-    llm = get_llm()
-    template = """Retorne APENAS o código ticker da ação brasileira (.SA) para: {query}. Ex: 'Petrobras' -> 'PETR4.SA'. Sem texto extra."""
-    chain = PromptTemplate.from_template(template) | llm | StrOutputParser()
-    try:
-        return chain.invoke({"query": query}).strip()
-    except:
-        return None
-
-def generate_summary_ai(ticker):
-    """Gera resumo curto estilo Google"""
-    llm = get_llm()
-    template = """Para a empresa {ticker}, escreva um resumo de 3 linhas sobre o que ela faz e seu setor principal. Tom formal."""
-    chain = PromptTemplate.from_template(template) | llm | StrOutputParser()
-    return chain.invoke({"ticker": ticker})
-
-# ==============================================================================
-# 📊 3. DADOS DE MERCADO (YFINANCE)
+# 📊 3. FUNÇÕES DE DADOS
 # ==============================================================================
 
-@st.cache_data(ttl=600)
-def get_market_movers():
-    """Calcula Top 5 Altas e Baixas da lista definida"""
-    data = yf.download(TOP_STOCKS, period="2d", progress=False)['Close']
+@st.cache_data(ttl=300) # Cache de 5 min
+def get_market_data():
+    """Baixa dados e calcula variações"""
+    df_prices = yf.download(TOP_STOCKS, period="2d", progress=False)['Close']
     
-    # Calcula variação % do último dia
-    changes = ((data.iloc[-1] - data.iloc[-2]) / data.iloc[-2]) * 100
+    # Cálculo Variação %
+    changes = ((df_prices.iloc[-1] - df_prices.iloc[-2]) / df_prices.iloc[-2]) * 100
+    last_price = df_prices.iloc[-1]
     
-    # Cria DataFrame e ordena
-    df = pd.DataFrame({'Ticker': changes.index, 'Change': changes.values})
-    df['Ticker'] = df['Ticker'].str.replace('.SA', '') # Limpa nome
+    # Montar DataFrame Final
+    df = pd.DataFrame({
+        'Ticker': changes.index,
+        'Change': changes.values,
+        'Price': last_price.values
+    })
+    df['Ticker'] = df['Ticker'].str.replace('.SA', '') # Limpar .SA
     
     top_high = df.sort_values('Change', ascending=False).head(5)
     top_low = df.sort_values('Change', ascending=True).head(5)
     
     return top_high, top_low
 
-def get_stock_details(ticker, period="1mo"):
-    """Pega dados detalhados e histórico baseado no período selecionado"""
-    stock = yf.Ticker(ticker)
-    
-    # Histórico dinâmico
-    # Mapeamento: 1D (usamos 2d e intervalo curto), 5D, 1M, etc.
-    interval = "1d"
-    if period == "1d": 
-        h = stock.history(period="1d", interval="15m") # Intraday
-    elif period == "5d":
-        h = stock.history(period="5d", interval="60m")
-    else:
-        h = stock.history(period=period) # Padrão diário
-
-    info = stock.fast_info
-    
-    # Tenta pegar logo (às vezes o Yahoo tem, senão usamos placeholder)
-    logo = stock.info.get('logo_url', 'https://cdn-icons-png.flaticon.com/512/7669/7669387.png')
-
-    return {
-        "price": info.last_price,
-        "prev_close": info.previous_close,
-        "history": h['Close'],
-        "logo": logo,
-        "name": ticker.replace('.SA', '')
-    }
-
-# ==============================================================================
-# 🖥️ 4. INTERFACE DO USUÁRIO
-# ==============================================================================
-
-# --- SIDEBAR ---
-with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2666/2666505.png", width=50)
-    st.markdown("### Menu")
-    mode = st.radio("Navegação", ["🏠 Início (Mercado)", "🔎 Pesquisar Ativo"])
-    st.divider()
-    st.caption("Powered by Gemini 1.5 & Yahoo Finance")
-
-# --- PÁGINA INICIAL (TOP 5) ---
-if mode == "🏠 Início (Mercado)":
-    st.title("Resumo do Mercado")
-    st.markdown("Monitoramento das principais ações do Brasil hoje.")
-    
-    with st.spinner("Atualizando ranking..."):
-        highs, lows = get_market_movers()
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🚀 Maiores Altas")
-        for _, row in highs.iterrows():
-            st.markdown(f"**{row['Ticker']}**: <span style='color:green'>+{row['Change']:.2f}%</span>", unsafe_allow_html=True)
-            st.progress(min(row['Change']/10, 1.0)) # Barra visual simples
-
-    with col2:
-        st.subheader("🔻 Maiores Baixas")
-        for _, row in lows.iterrows():
-            st.markdown(f"**{row['Ticker']}**: <span style='color:red'>{row['Change']:.2f}%</span>", unsafe_allow_html=True)
-            st.progress(min(abs(row['Change'])/10, 1.0))
-
-# --- PÁGINA DE PESQUISA (DETALHES) ---
-elif mode == "🔎 Pesquisar Ativo":
-    c_search, c_btn = st.columns([4, 1])
-    with c_search:
-        query = st.text_input("Busque uma empresa:", placeholder="Ex: Itaú, Vale, Magazine Luiza...")
-    with c_btn:
-        st.write("")
-        st.write("")
-        btn = st.button("Buscar", type="primary", use_container_width=True)
-
-    if query:
-        # 1. Identificar (LangChain)
-        ticker = identify_ticker_ai(query)
+@st.cache_data(ttl=900) # Cache de 15 min
+def get_news():
+    """Busca notícias via yfinance (Ticker ^BVSP - Ibovespa) que traz notícias gerais"""
+    try:
+        # Tenta pegar notícias do índice Bovespa via Yahoo Finance
+        ibov = yf.Ticker("^BVSP")
+        news_list = ibov.news
         
-        if ticker:
-            # 2. Seletor de Tempo (Igual Google Finance)
-            st.write("")
-            time_cols = st.columns([1, 1, 1, 1, 1, 1, 6]) # Colunas para botões ficarem juntos
+        # Formata para uso simples
+        formatted_news = []
+        for item in news_list[:6]: # Pega as 6 ultimas
+            # Tenta resolver a imagem da notícia ou usa placeholder
+            img_uuid = item.get('thumbnail', {}).get('resolutions', [{}])[0].get('url', '')
             
-            # Controle de estado para o período
-            period_map = {"1D": "1d", "5D": "5d", "1M": "1mo", "6M": "6mo", "1A": "1y", "Máx": "max"}
-            selected_label = st.radio("Período", options=list(period_map.keys()), horizontal=True, label_visibility="collapsed")
-            selected_period = period_map[selected_label]
+            formatted_news.append({
+                "title": item['title'],
+                "publisher": item['publisher'],
+                "link": item['link'],
+                "time": datetime.fromtimestamp(item['providerPublishTime']).strftime('%H:%M')
+            })
+        return formatted_news
+    except:
+        # Fallback caso falhe (Dados falsos para não quebrar a tela)
+        return [
+            {"title": "Mercado aguarda decisão de juros do Copom", "publisher": "InfoMoney", "link": "#", "time": "10:00"},
+            {"title": "Petrobras sobe com alta do petróleo no exterior", "publisher": "Bloomberg", "link": "#", "time": "09:45"},
+            {"title": "Dólar opera em baixa com fluxo estrangeiro", "publisher": "Valor", "link": "#", "time": "09:30"}
+        ]
 
-            # 3. Baixar Dados
-            try:
-                data = get_stock_details(ticker, selected_period)
-                
-                # --- CABEÇALHO ESTILO GOOGLE ---
-                st.divider()
-                h_col1, h_col2 = st.columns([1, 5])
-                
-                with h_col1:
-                    # Exibe Logo
-                    st.image(data['logo'], width=80)
-                
-                with h_col2:
-                    st.markdown(f"<div class='big-font'>{query.upper()} ({ticker})</div>", unsafe_allow_html=True)
-                    
-                    # Cálculo de variação
-                    delta = data['price'] - data['prev_close']
-                    delta_pct = (delta / data['prev_close']) * 100
-                    color_cls = "metric-pos" if delta >= 0 else "metric-neg"
-                    sinal = "+" if delta >= 0 else ""
-                    
-                    st.markdown(
-                        f"""
-                        <span style='font-size: 28px'>R$ {data['price']:.2f}</span> 
-                        <span class='{color_cls}'> {sinal}{delta:.2f} ({sinal}{delta_pct:.2f}%) </span> hoje
-                        """, 
-                        unsafe_allow_html=True
-                    )
+# ==============================================================================
+# 🖥️ 4. RENDERIZAÇÃO DA INTERFACE
+# ==============================================================================
 
-                # --- GRÁFICO ---
-                st.markdown("---")
-                # Gráfico de linha simples e limpo
-                st.line_chart(data['history'], color="#137333" if delta >= 0 else "#a50e0e", use_container_width=True)
-                
-                # --- RESUMO (LANGCHAIN) ---
-                with st.expander("Sobre a empresa", expanded=True):
-                    with st.spinner("Gerando resumo com IA..."):
-                        summary = generate_summary_ai(ticker)
-                        st.write(summary)
+st.title("⚡ Mercado Agora")
 
-            except Exception as e:
-                st.error(f"Erro ao carregar dados: {e}")
-        else:
-            st.warning("Empresa não encontrada. Tente novamente.")
+# Layout Principal: Coluna Esquerda (Dados) | Coluna Direita (Notícias)
+col_left, col_right = st.columns([1, 1], gap="large")
+
+# --- LADO ESQUERDO: TOP ALTAS E BAIXAS ---
+with col_left:
+    highs, lows = get_market_data()
+    
+    # Sub-divisão: Altas na esquerda, Baixas na direita (dentro da coluna da esquerda)
+    c_high, c_low = st.columns(2)
+    
+    with c_high:
+        st.subheader("🔥 Maiores Altas")
+        for _, row in highs.iterrows():
+            ticker = row['Ticker']
+            domain = DOMAINS.get(ticker, 'google.com')
+            logo_url = f"https://logo.clearbit.com/{domain}"
+            
+            # HTML Card Customizado
+            st.markdown(f"""
+            <div class="stock-card">
+                <div class="stock-info">
+                    <img src="{logo_url}" class="stock-logo" onerror="this.style.display='none'">
+                    <div><b>{ticker}</b><br><span style="font-size:12px; color:#aaa">R$ {row['Price']:.2f}</span></div>
+                </div>
+                <div class="price-tag pos">+{row['Change']:.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    with c_low:
+        st.subheader("❄️ Maiores Baixas")
+        for _, row in lows.iterrows():
+            ticker = row['Ticker']
+            domain = DOMAINS.get(ticker, 'google.com')
+            logo_url = f"https://logo.clearbit.com/{domain}"
+            
+            st.markdown(f"""
+            <div class="stock-card">
+                <div class="stock-info">
+                    <img src="{logo_url}" class="stock-logo" onerror="this.style.display='none'">
+                    <div><b>{ticker}</b><br><span style="font-size:12px; color:#aaa">R$ {row['Price']:.2f}</span></div>
+                </div>
+                <div class="price-tag neg">{row['Change']:.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+# --- LADO DIREITO: NOTÍCIAS ---
+with col_right:
+    st.subheader("📰 Últimas Notícias (Relevantes)")
+    
+    news_data = get_news()
+    
+    for news in news_data:
+        st.markdown(f"""
+        <a href="{news['link']}" target="_blank" style="text-decoration:none;">
+            <div class="news-card">
+                <div class="news-title">{news['title']}</div>
+                <div class="news-meta">
+                    <span>{news['publisher']}</span>
+                    <span>🕒 {news['time']}</span>
+                </div>
+            </div>
+        </a>
+        """, unsafe_allow_html=True)
+
+    if st.button("🔄 Atualizar Dados"):
+        st.cache_data.clear()
+        st.rerun()

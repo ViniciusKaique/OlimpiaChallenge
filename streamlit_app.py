@@ -1,208 +1,208 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from duckduckgo_search import DDGS
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+import os
 
 # ==============================================================================
-# ⚙️ 1. CONFIGURAÇÃO E LISTA IBOV (HARDCODED PARA PERFORMANCE)
+# ⚙️ CONFIGURAÇÃO INICIAL
 # ==============================================================================
-st.set_page_config(page_title="IBOV AI Master", page_icon="🐂", layout="wide")
+st.set_page_config(
+    page_title="Fast Finance AI", 
+    page_icon="⚡", 
+    layout="wide"
+)
 
-# Lista das principais ações do IBOVESPA para monitoramento rápido
-# (Adicionei as mais líquidas para não deixar o app pesado demais, mas cobre 90% do volume)
-IBOV_TICKERS = [
-    "VALE3.SA", "PETR4.SA", "ITUB4.SA", "BBDC4.SA", "BBAS3.SA", "WEGE3.SA", "ABEV3.SA",
-    "RENT3.SA", "BPAC11.SA", "SUZB3.SA", "HAPV3.SA", "RDOR3.SA", "B3SA3.SA", "EQTL3.SA",
-    "RADL3.SA", "PRIO3.SA", "RAIL3.SA", "GGBR4.SA", "JBSS3.SA", "VIVT3.SA", "CSAN3.SA",
-    "ELET3.SA", "SBSP3.SA", "TIMS3.SA", "LREN3.SA", "MGLU3.SA", "ASAI3.SA", "HYPE3.SA",
-    "CMIG4.SA", "TRPL4.SA", "CPLE6.SA", "CCRO3.SA", "GOLL4.SA", "AZUL4.SA", "EMBR3.SA"
-]
+# Estilo CSS para limpar a interface e dar destaque
+st.markdown("""
+<style>
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 5px solid #4CAF50;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ==============================================================================
-# 🚀 2. MOTOR DE DADOS OTIMIZADO (ETL)
+# 🔐 SIDEBAR & USUÁRIO
+# ==============================================================================
+with st.sidebar:
+    st.header("👤 Perfil do Usuário")
+    # Simulação de usuário logado
+    st.markdown("""
+    **Status:** 🟢 Online  
+    **Usuário:** Analista Financeiro  
+    **Acesso:** Premium
+    """)
+    st.divider()
+    st.info("💡 Modo Turbo Ativado: Notícias externas desativadas para máxima velocidade.")
+
+# ==============================================================================
+# 🧠 LANGCHAIN & IA (GEMINI 1.5 FLASH)
 # ==============================================================================
 
-@st.cache_data(ttl=600)  # Cache de 10 minutos para não travar o app
-def get_ibov_ranking():
+def get_llm():
+    """Configura o modelo mais rápido disponível"""
+    # Certifique-se de ter sua API KEY no arquivo .streamlit/secrets.toml ou no ambiente
+    # Caso não tenha secrets, substitua st.secrets["GOOGLE_API_KEY"] pela string direta (não recomendado para produção)
+    api_key = st.secrets.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY"))
+    
+    return ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash", # Modelo focado em velocidade
+        google_api_key=api_key,
+        temperature=0.0
+    )
+
+def identify_ticker(company_name):
     """
-    Baixa dados de TODOS os tickers de uma vez só (Batch Download).
-    É muito mais rápido do que um loop for.
+    Usa LangChain para traduzir 'Nome da Empresa' -> 'Ticker.SA'
+    Ex: 'Itaú' -> 'ITUB4.SA'
     """
+    llm = get_llm()
+    
+    template = """
+    Você é um especialista em mercado financeiro brasileiro (B3).
+    Sua única tarefa é retornar o código (Ticker) da ação principal da empresa solicitada, seguido de '.SA'.
+    Se houver ações preferenciais (PN) e ordinárias (ON), prefira a de maior liquidez (geralmente PN final 4 ou Unit final 11).
+    
+    Exemplos:
+    Entrada: Petrobras -> Saída: PETR4.SA
+    Entrada: Vale -> Saída: VALE3.SA
+    Entrada: Banco do Brasil -> Saída: BBAS3.SA
+    
+    Entrada: {company}
+    Saída (APENAS O CÓDIGO):
+    """
+    
+    prompt = PromptTemplate.from_template(template)
+    chain = prompt | llm | StrOutputParser()
+    
     try:
-        # Baixa apenas os últimos 2 dias para calcular a variação
-        df = yf.download(IBOV_TICKERS, period="2d", progress=False)['Close']
-        
-        # Se baixou com sucesso, pega o último preço e o penúltimo
-        if len(df) >= 2:
-            current_prices = df.iloc[-1]
-            prev_prices = df.iloc[-2]
-            
-            # Calcula Variação %
-            changes = ((current_prices - prev_prices) / prev_prices) * 100
-            
-            # Cria um DataFrame limpo
-            ranking = pd.DataFrame({
-                'Ticker': changes.index.str.replace('.SA', ''),
-                'Price': current_prices.values,
-                'Change': changes.values
-            })
-            
-            # Remove dados vazios (caso alguma ação não tenha negociado)
-            ranking = ranking.dropna()
-            
-            # Separa Top 5
-            top_high = ranking.sort_values(by='Change', ascending=False).head(5)
-            top_low = ranking.sort_values(by='Change', ascending=True).head(5)
-            
-            return top_high, top_low
+        ticker = chain.invoke({"company": company_name}).strip()
+        return ticker
     except Exception as e:
-        st.error(f"Erro ao atualizar mercado: {e}")
-        return pd.DataFrame(), pd.DataFrame()
-
-def get_company_logo(ticker):
-    """Tenta pegar o logo via Yahoo Finance. Retorna None se falhar."""
-    try:
-        t = yf.Ticker(ticker + ".SA" if not ticker.endswith(".SA") else ticker)
-        return t.info.get('logo_url', None)
-    except:
+        st.error(f"Erro ao identificar ticker: {e}")
         return None
 
-def get_web_search(query):
-    """Busca notícias com links para o relatório (Requisito PDF)."""
-    text = ""
+def generate_summary(company_name, ticker):
+    """
+    Gera um resumo rápido usando o conhecimento interno do modelo (sem busca web lenta)
+    """
+    llm = get_llm()
+    
+    template = """
+    Analise a empresa {company} (Ticker: {ticker}).
+    Forneça um resumo executivo em Markdown com:
+    1. **Setor de Atuação**
+    2. **Resumo do Negócio** (máximo 2 frases)
+    3. **Principais Produtos/Serviços**
+    
+    Seja conciso e direto.
+    """
+    
+    prompt = PromptTemplate.from_template(template)
+    chain = prompt | llm | StrOutputParser()
+    
+    return chain.invoke({"company": company_name, "ticker": ticker})
+
+# ==============================================================================
+# 📈 MOTOR DE DADOS (YFINANCE)
+# ==============================================================================
+
+@st.cache_data(ttl=300) # Cache de 5 minutos
+def get_stock_data(ticker):
+    """Busca dados de preço e histórico para o gráfico"""
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.news(query, region='br-pt', safesearch='off', max_results=4))
-            for r in results:
-                text += f"TITULO: {r['title']} | LINK: {r['url']} | FONTE: {r['source']}\n"
+        stock = yf.Ticker(ticker)
+        
+        # Dados instantâneos (mais rápido que baixar histórico completo)
+        info = stock.fast_info
+        current_price = info.last_price
+        prev_close = info.previous_close
+        
+        delta = ((current_price - prev_close) / prev_close) * 100
+        
+        # Histórico para o gráfico (últimos 6 meses para ser leve)
+        history = stock.history(period="6mo")
+        
+        return {
+            "price": current_price,
+            "delta": delta,
+            "history": history
+        }
     except Exception as e:
-        text = f"Erro na busca: {e}"
-    return text
+        return None
 
 # ==============================================================================
-# 🧠 3. INTELIGÊNCIA (GEMINI)
+# 🖥️ INTERFACE PRINCIPAL
 # ==============================================================================
 
-def run_analysis(company, ticker):
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
-        google_api_key=st.secrets["GOOGLE_API_KEY"],
-        temperature=0.1
-    )
-    
-    # Busca focada
-    web_data = get_web_search(f"{company} {ticker} notícias mercado financeiro status invest")
+st.title("🚀 Fast Finance AI Check")
+st.markdown("Digite o nome da empresa para uma análise instantânea.")
 
-    prompt = PromptTemplate.from_template(
-        """
-        Você é um analista sênior.
-        EMPRESA: {company} ({ticker})
-        DADOS DA WEB: {web_data}
+# Input centralizado
+col1, col2 = st.columns([3, 1])
+with col1:
+    company_input = st.text_input("Nome da Empresa:", placeholder="Ex: Weg, Magazine Luiza, Ambev...")
+with col2:
+    st.write("") # Espaçamento
+    st.write("") 
+    analyze_btn = st.button("Analisar Agora", type="primary", use_container_width=True)
+
+if analyze_btn and company_input:
+    # 1. Identificação do Ticker (LangChain)
+    with st.status("🔍 Identificando ativo...", expanded=True) as status:
+        st.write("Consultando Gemini Flash para encontrar o ticker...")
+        ticker = identify_ticker(company_input)
         
-        Gere um relatório técnico em Markdown.
-        
-        ### 🏢 1. Perfil e Setor
-        * **Setor:** [Identifique o setor]
-        * **Histórico/Produtos:** [Resumo curto baseada nos dados]
-
-        ### 📰 2. Destaques (Com Links)
-        (Liste 3 notícias. OBRIGATÓRIO: Use o formato de link Markdown).
-        
-        * 🔗 **[TITULO_DA_NOTICIA](LINK_DA_NOTICIA)**
-          *Fonte:* [Nome da Fonte]
-
-        ### 💡 3. Veredito
-        [Conclusão de 1 linha]
-        """
-    )
-    
-    return (prompt | llm | StrOutputParser()).invoke({
-        "company": company, "ticker": ticker, "web_data": web_data
-    })
-
-# ==============================================================================
-# 🖥️ 4. INTERFACE
-# ==============================================================================
-
-def main():
-    st.title("📊 IBOVESPA AI Tracker")
-    
-    # --- BLOCO 1: DASHBOARD DE MERCADO (CACHEADO) ---
-    st.markdown("### 🔥 Termômetro do Mercado (Top 5)")
-    
-    with st.spinner("Atualizando cotações do IBOVESPA..."):
-        highs, lows = get_ibov_ranking()
-
-    if not highs.empty:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("#### 🚀 Maiores Altas")
-            # Usando st.dataframe ou metricas para ficar bonito
-            for _, row in highs.iterrows():
-                st.markdown(f"**{row['Ticker']}**: :green[R$ {row['Price']:.2f} (+{row['Change']:.2f}%)]")
-                
-        with col2:
-            st.markdown("#### 🔻 Maiores Baixas")
-            for _, row in lows.iterrows():
-                st.markdown(f"**{row['Ticker']}**: :red[R$ {row['Price']:.2f} ({row['Change']:.2f}%)]")
-    
-    st.markdown("---")
-
-    # --- BLOCO 2: PESQUISA DETALHADA ---
-    col_search, col_btn = st.columns([4, 1])
-    with col_search:
-        search_input = st.text_input("Pesquisar Ação (Nome ou Ticker):", placeholder="Ex: Petrobras, WEGE3...")
-    with col_btn:
-        st.write("") # Espaçamento
-        st.write("")
-        btn_go = st.button("Analisar 🔎", use_container_width=True)
-
-    if btn_go and search_input:
-        # 1. Identificar Ticker (Rápido)
-        llm_quick = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=st.secrets["GOOGLE_API_KEY"])
-        ticker = (PromptTemplate.from_template("Responda APENAS o ticker da ação {q} na B3 (ex: VALE3). Sem .SA") 
-                  | llm_quick | StrOutputParser()).invoke({"q": search_input}).strip()
-        
-        # 2. Pegar Logo e Preço Específico
-        logo_url = get_company_logo(ticker)
-        
-        # Busca cotação específica atualizada
-        try:
-            stock = yf.Ticker(f"{ticker}.SA")
-            price = stock.fast_info.last_price
-            change = ((price - stock.fast_info.previous_close) / stock.fast_info.previous_close) * 100
-            color = "green" if change >= 0 else "red"
-        except:
-            price = 0.0
-            change = 0.0
-            color = "gray"
-
-        # --- EXIBIÇÃO DO CABEÇALHO DA AÇÃO ---
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([1, 2, 2])
+        if ticker:
+            status.update(label=f"Ativo encontrado: {ticker}", state="running")
             
-            with c1:
-                if logo_url:
-                    st.image(logo_url, width=100)
-                else:
-                    st.header("🏢") # Placeholder se não tiver logo
+            # 2. Coleta de Dados (Yahoo Finance)
+            st.write("Baixando cotações em tempo real...")
+            data = get_stock_data(ticker)
             
-            with c2:
-                st.subheader(f"{search_input.upper()}")
-                st.caption(f"Ticker: {ticker}")
-                
-            with c3:
-                st.metric(label="Cotação Atual", value=f"R$ {price:.2f}", delta=f"{change:.2f}%")
+            # 3. Geração de Resumo (LangChain)
+            st.write("Gerando perfil corporativo...")
+            summary = generate_summary(company_input, ticker)
+            
+            status.update(label="Análise Concluída!", state="complete", expanded=False)
+        else:
+            status.update(label="Erro ao encontrar empresa.", state="error")
+            st.stop()
 
-        # --- RELATÓRIO GEMINI (NO EXPANDER) ---
-        with st.expander("📋 Ver Análise Fundamentalista e Notícias (Gemini AI)", expanded=True):
-            with st.spinner("Lendo notícias e gerando insights..."):
-                report = run_analysis(search_input, ticker)
-                st.markdown(report)
+    if data:
+        # Layout de Resultados
+        st.divider()
+        
+        # Cabeçalho com Preço
+        c_metrics, c_chart = st.columns([1, 2])
+        
+        with c_metrics:
+            st.subheader(f"🏢 {ticker}")
+            
+            color_delta = "normal"
+            if data['delta'] > 0: color_delta = "normal" # Streamlit trata verde como normal/positivo automático
+            
+            st.metric(
+                label="Preço Atual",
+                value=f"R$ {data['price']:.2f}",
+                delta=f"{data['delta']:.2f}%"
+            )
+            
+            st.markdown("---")
+            st.markdown("### 📋 Perfil da Empresa")
+            st.markdown(summary)
 
-if __name__ == "__main__":
-    main()
+        with c_chart:
+            st.subheader("📈 Performance (6 Meses)")
+            # Gráfico de Área do Streamlit é rápido e bonito
+            st.area_chart(data['history']['Close'], color="#4CAF50" if data['delta'] > 0 else "#FF5252")
+
+else:
+    # Estado Zero (Tela Inicial)
+    st.info("Aguardando entrada de dados para iniciar o fluxo LangChain...")

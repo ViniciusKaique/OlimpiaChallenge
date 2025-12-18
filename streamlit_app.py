@@ -11,13 +11,13 @@ from langchain_core.output_parsers import StrOutputParser
 # ==============================================================================
 # 1. CONFIGURAÇÃO VISUAL
 # ==============================================================================
-st.set_page_config(page_title="Invest Pro", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Invest Pro - Análise Automática", page_icon="📊", layout="wide")
 
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; padding-bottom: 5rem; }
     
-    /* Cards de Ações */
+    /* Cards de Ações (Dashboard) */
     .stock-card {
         background-color: #262730;
         border: 1px solid #3f3f46;
@@ -38,8 +38,8 @@ st.markdown("""
     /* Notícias */
     .news-card {
         background-color: #1f2937;
-        padding: 12px;
-        border-radius: 6px;
+        padding: 15px;
+        border-radius: 8px;
         margin-bottom: 10px;
         border-left: 4px solid #3b82f6;
         transition: transform 0.2s;
@@ -47,8 +47,16 @@ st.markdown("""
         display: block;
     }
     .news-card:hover { transform: translateX(5px); background-color: #374151; }
-    .news-title { font-size: 0.9rem; color: #f3f4f6; font-weight: 500; margin-bottom: 4px; }
-    .news-meta { font-size: 0.75rem; color: #9ca3af; }
+    .news-title { font-size: 1rem; color: #f3f4f6; font-weight: 600; margin-bottom: 6px; }
+    .news-meta { font-size: 0.8rem; color: #9ca3af; display: flex; justify-content: space-between; }
+    
+    /* Box da IA */
+    .ai-box {
+        background-color: #2d2d2d;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #444;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -78,7 +86,7 @@ if not st.session_state['logged_in']:
     c1, c2, c3 = st.columns([1, 1, 1])
     with c2:
         st.markdown("<br><br>", unsafe_allow_html=True)
-        st.title("🔒 Acesso Restrito")
+        st.title("🔒 Invest Banking Access")
         st.text_input("Usuário", key="username_input")
         st.text_input("Senha", type="password", key="password_input")
         st.button("Entrar", on_click=check_login, use_container_width=True)
@@ -86,7 +94,7 @@ if not st.session_state['logged_in']:
     st.stop()
 
 # ==============================================================================
-# 3. FUNÇÕES DE DADOS (CORRIGIDAS)
+# 3. FUNÇÕES DE DADOS (DASHBOARD & PESQUISA)
 # ==============================================================================
 
 MONITORED_TICKERS = [
@@ -124,15 +132,22 @@ def get_dashboard_data():
            df.sort_values('Change', ascending=True).head(5)
 
 @st.cache_data(ttl=900)
-def get_google_news():
-    """Busca notícias via RSS do Google News (Estável)"""
-    url = "https://news.google.com/rss/search?q=Mercado+Financeiro+Brasil+when:1d&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+def get_google_news(query="Mercado Financeiro Brasil"):
+    """
+    Busca notícias via RSS do Google News.
+    Aceita uma 'query' para buscar notícias específicas da empresa pesquisada.
+    """
+    # URL encoded para garantir que espaços funcionem
+    query_url = query.replace(" ", "+")
+    url = f"https://news.google.com/rss/search?q={query_url}+when:2d&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+    
     try:
         response = requests.get(url, timeout=5)
         root = ET.fromstring(response.content)
         news_list = []
         
-        for item in root.findall('.//item')[:6]:
+        # Pega até 4 notícias
+        for item in root.findall('.//item')[:4]:
             title = item.find('title').text
             source = "Google News"
             if " - " in title:
@@ -148,7 +163,7 @@ def get_google_news():
             })
         return news_list
     except:
-        return [{"title": "Erro ao carregar notícias", "link": "#", "source": "Sistema", "time": "--:--"}]
+        return []
 
 @st.cache_data(ttl=3600)
 def get_logo(ticker):
@@ -163,87 +178,81 @@ def get_logo(ticker):
     return f"https://www.google.com/s2/favicons?domain={domain}&sz=64"
 
 def resolve_ticker(text):
-    """
-    SUPER MAPA DE NOMES -> TICKERS
-    Resolve o problema de buscar 'Suzano' e dar erro.
-    """
+    """Mapeia nomes comuns para Tickers"""
     mapa = {
-        # Bancos
         "ITAU": "ITUB4.SA", "ITAÚ": "ITUB4.SA", "ITUB": "ITUB4.SA",
         "BRADESCO": "BBDC4.SA", "BBDC": "BBDC4.SA",
         "BANCO DO BRASIL": "BBAS3.SA", "BB": "BBAS3.SA",
-        "SANTANDER": "SANB11.SA", "NUBANK": "ROXO34.SA", "BTG": "BPAC11.SA",
-        
-        # Commodities & Energia
-        "VALE": "VALE3.SA", 
-        "PETROBRAS": "PETR4.SA", "PETRO": "PETR4.SA",
-        "SUZANO": "SUZB3.SA",
-        "CSN": "CSNA3.SA", "GERDAU": "GGBR4.SA",
-        "PRIO": "PRIO3.SA", "3R": "RRRP3.SA",
-        "ELETROBRAS": "ELET3.SA", "CEMIG": "CMIG4.SA", "COPEL": "CPLE6.SA",
-        
-        # Varejo & Consumo
-        "MAGALU": "MGLU3.SA", "MAGAZINE": "MGLU3.SA",
-        "VIA": "BHIA3.SA", "CASAS BAHIA": "BHIA3.SA",
-        "RENNER": "LREN3.SA", "LOJAS RENNER": "LREN3.SA",
-        "AMBEV": "ABEV3.SA", "NATURA": "NTCO3.SA",
-        "LOCALIZA": "RENT3.SA",
-        
-        # Saúde & Outros
-        "HAPVIDA": "HAPV3.SA", "REDE DOR": "RDOR3.SA",
-        "WEG": "WEGE3.SA", "EMBRAER": "EMBR3.SA", "B3": "B3SA3.SA"
+        "VALE": "VALE3.SA", "PETROBRAS": "PETR4.SA", "PETRO": "PETR4.SA",
+        "SUZANO": "SUZB3.SA", "GERDAU": "GGBR4.SA", "PRIO": "PRIO3.SA",
+        "ELETROBRAS": "ELET3.SA", "MAGALU": "MGLU3.SA", "AMBEV": "ABEV3.SA",
+        "WEG": "WEGE3.SA", "B3": "B3SA3.SA", "JBS": "JBSS3.SA"
     }
-    
     clean = text.upper().strip()
-    
-    # 1. Tenta achar no mapa direto
-    if clean in mapa:
-        return mapa[clean]
-    
-    # 2. Se o usuário digitou o ticker sem .SA (ex: WEGE3)
-    if len(clean) <= 6 and not clean.endswith(".SA"):
-        return f"{clean}.SA"
-        
+    if clean in mapa: return mapa[clean]
+    if len(clean) <= 6 and not clean.endswith(".SA"): return f"{clean}.SA"
     return clean
 
-def run_gemini_analysis(ticker):
-    """Analista IA (Gemini 1.5 Flash)"""
+# ==============================================================================
+# 4. LANGCHAIN (ATUALIZADO PARA O DESAFIO)
+# ==============================================================================
+def run_langchain_analysis(ticker_symbol, company_name):
+    """
+    Fluxo LangChain para atender os requisitos:
+    A. Resumo/Descrição (Setor, Histórico, Produtos)
+    B. Análise Fundamentalista
+    """
     try:
         api_key = st.secrets.get("GOOGLE_API_KEY", "")
-        if not api_key: return "⚠️ Configure a API Key no arquivo .streamlit/secrets.toml"
+        if not api_key: return "⚠️ Configure a API Key no arquivo secrets.toml"
         
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key)
+        # Modelo 1.5 Flash (Rápido e Eficiente)
+        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key)
         
-        template = """Você é um analista financeiro experiente.
-        Analise a ação {ticker} e forneça 3 pontos fundamentais (Positivos ou Negativos) para um investidor hoje.
-        Seja direto, use bullet points e fale em Português."""
+        # Prompt Engenharia alinhada ao Desafio
+        template = """
+        Você é um analista de Investment Banking.
+        Realize uma pesquisa e gere um relatório conciso sobre a empresa: {company_name} (Ticker: {ticker}).
+        
+        A saída deve conter OBRIGATORIAMENTE os seguintes tópicos formatados em Markdown:
+
+        ### 1. Resumo Corporativo
+        * **Setor:** [Insira o setor]
+        * **Descrição:** [Breve histórico e o que a empresa faz]
+        * **Principais Produtos/Serviços:** [Liste os principais]
+
+        ### 2. Análise de Mercado (Pontos Chave)
+        * Forneça 3 pontos de atenção (Bullish/Otimista ou Bearish/Pessimista) para o momento atual da empresa.
+
+        Seja profissional, direto e utilize Português do Brasil.
+        """
         
         chain = PromptTemplate.from_template(template) | llm | StrOutputParser()
-        return chain.invoke({"ticker": ticker})
+        return chain.invoke({"ticker": ticker_symbol, "company_name": company_name})
     except Exception as e:
         return f"Erro na IA: {str(e)}"
 
 # ==============================================================================
-# 4. DASHBOARD
+# 5. DASHBOARD UI
 # ==============================================================================
 
 # Sidebar
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/295/295128.png", width=50)
-    st.write(f"Olá, **{st.session_state['usuario_atual']}**")
+    st.write(f"Analista: **{st.session_state['usuario_atual']}**")
     st.divider()
     st.button("Sair", on_click=logout)
 
-st.title("📊 Monitor de Mercado")
+st.title("📊 Monitor de Mercado & Pesquisa")
 
+# --- TOPO: RESUMO GERAL DO MERCADO ---
 col_left, col_right = st.columns([2, 1], gap="medium")
 
 with col_left:
     highs, lows = get_dashboard_data()
-    
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("##### 🚀 Maiores Altas")
+        st.markdown("##### 🚀 Maiores Altas (Dia)")
         if not highs.empty:
             for _, row in highs.iterrows():
                 logo = get_logo(row['Ticker'])
@@ -255,11 +264,9 @@ with col_left:
                     </div>
                     <div class="txt-green">+{row['Change']:.2f}%</div>
                 </div>""", unsafe_allow_html=True)
-        else:
-            st.info("Carregando dados...")
 
     with c2:
-        st.markdown("##### 🔻 Maiores Baixas")
+        st.markdown("##### 🔻 Maiores Baixas (Dia)")
         if not lows.empty:
             for _, row in lows.iterrows():
                 logo = get_logo(row['Ticker'])
@@ -273,8 +280,8 @@ with col_left:
                 </div>""", unsafe_allow_html=True)
 
 with col_right:
-    st.markdown("##### 📰 Manchetes (Google News)")
-    news = get_google_news()
+    st.markdown("##### 📰 Giro de Mercado")
+    news = get_google_news("Bolsa de Valores Brasil")
     for n in news:
         st.markdown(f"""
         <a href="{n['link']}" target="_blank" class="news-card">
@@ -282,38 +289,72 @@ with col_right:
             <div class="news-meta">{n['source']} • {n['time']}</div>
         </a>""", unsafe_allow_html=True)
 
-st.divider()
+st.markdown("---")
 
-# Área de Análise
-st.subheader("🤖 Analista IA & Gráficos")
-search_input = st.text_input("Pesquisar Ativo (ex: Itau, Suzano, VALE3):", placeholder="Digite o nome ou código...").strip()
+# --- ÁREA DO DESAFIO: PESQUISA & LANGCHAIN ---
+st.subheader("🔎 Pesquisa de Ativo (Desafio IB)")
+search_input = st.text_input("Digite o nome da empresa (ex: Vale, Itau, Ambev):", placeholder="Nome ou Ticker...").strip()
 
 if search_input:
-    # 1. Resolve o nome para Ticker oficial usando o mapa
+    # 1. Identificação
     ticker_oficial = resolve_ticker(search_input)
     ticker_display = ticker_oficial.replace(".SA", "")
     
-    cg, cia = st.columns([2, 1])
+    st.info(f"Processando análise para: **{ticker_display}** ({ticker_oficial})...")
+
+    # 2. Dados via yfinance (Preço e Histórico)
+    try:
+        stock = yf.Ticker(ticker_oficial)
+        info = stock.fast_info
+        current_price = info.last_price
+        
+        # Se não tiver preço, o ticker provavelmente está errado
+        if not current_price:
+            st.error(f"Não foi possível encontrar dados para '{search_input}'. Tente outro nome.")
+            st.stop()
+            
+    except Exception:
+        st.error("Erro ao conectar com a bolsa.")
+        st.stop()
+
+    # --- LAYOUT DE RESULTADO DO DESAFIO ---
     
-    with cg:
-        st.markdown(f"**Gráfico: {ticker_display}**")
-        try:
-            stock = yf.Ticker(ticker_oficial)
-            # 2. Verifica se o ticker existe pegando histórico
-            hist = stock.history(period="1y")
-            
-            if not hist.empty:
-                st.line_chart(hist['Close'], color="#3b82f6")
-            else:
-                # Se ainda assim falhar (ex: usuário digitou algo aleatório)
-                st.warning(f"Não encontramos dados para '{search_input}'. Tente digitar o código (ex: SUZB3).")
-        except Exception as e:
-            st.error(f"Erro ao carregar: {e}")
-            
-    with cia:
-        # Só roda a IA se o ticker for válido (histórico não vazio)
-        if not hist.empty:
-            st.markdown(f"**Análise Inteligente**")
-            with st.spinner(f"Analisando {ticker_display}..."):
-                analise = run_gemini_analysis(ticker_display)
-                st.info(analise)
+    # Exibe o PREÇO ATUAL (Requisito C do Desafio)
+    st.metric(label=f"Preço Atual ({ticker_display})", value=f"R$ {current_price:.2f}")
+
+    col_grafico, col_relatorio = st.columns([1.5, 1])
+
+    with col_grafico:
+        st.markdown("#### 📈 Performance da Ação")
+        # Abas para 1 mês, 6 meses e 1 ano
+        tab1, tab2, tab3 = st.tabs(["1 Mês", "6 Meses", "1 Ano"])
+        
+        with tab1:
+            st.line_chart(stock.history(period="1mo")['Close'], color="#3b82f6")
+        with tab2:
+            st.line_chart(stock.history(period="6mo")['Close'], color="#3b82f6")
+        with tab3:
+            st.line_chart(stock.history(period="1y")['Close'], color="#3b82f6")
+
+        # --- NOTÍCIAS ESPECÍFICAS (Requisito B do Desafio) ---
+        st.markdown("#### 📰 Últimas Notícias Relevantes")
+        # Busca notícias usando o nome digitado + 'ações' para filtrar bem
+        company_news = get_google_news(f"{search_input} ações negócios")
+        
+        if company_news:
+            for n in company_news:
+                st.markdown(f"""
+                <a href="{n['link']}" target="_blank" class="news-card">
+                    <div class="news-title">{n['title']}</div>
+                    <div class="news-meta">{n['source']} • {n['time']}</div>
+                </a>""", unsafe_allow_html=True)
+        else:
+            st.warning("Nenhuma notícia recente encontrada para esta empresa específica.")
+
+    with col_relatorio:
+        st.markdown("#### 🤖 Relatório LangChain (Requisito A)")
+        with st.container(border=True):
+            with st.spinner("Gerando Resumo e Análise Fundamentalista..."):
+                # Roda o LangChain para gerar Descrição e Pontos
+                analise = run_langchain_analysis(ticker_oficial, search_input)
+                st.markdown(analise)
